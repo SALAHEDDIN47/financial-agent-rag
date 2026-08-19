@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # 1. MinIO (Stockage Objet S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: rag-minio
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console Web
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password123
+    volumes:
+      - ./data/minio:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - rag-network
+
+  # 2. Elasticsearch (Recherche lexicale BM25)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: rag-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - rag-network
+
+  # 3. Kibana (Optionnel, pour visualiser ES)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: rag-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    networks:
+      - rag-network
+    depends_on:
+      - elasticsearch
+
+  # 4. Milvus Standalone (Base Vectorielle)
+  etcd:
+    container_name: rag-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    volumes:
+      - ./data/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - rag-network
+
+  minio-milvus:
+    container_name: rag-minio-milvus
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./data/minio-milvus:/data
+    command: server /data --console-address ":9002"
+    networks:
+      - rag-network
+
+  milvus:
+    container_name: rag-milvus
+    image: milvusdb/milvus:v2.3.3
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio-milvus:9000
+      MINIO_ACCESS_KEY_ID: minioadmin
+      MINIO_SECRET_ACCESS_KEY: minioadmin
+    ports:
+      - "19530:19530"
+    volumes:
+      - ./data/milvus:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio-milvus
+    networks:
+      - rag-network
+
+  # 5. Environnement de développement (Jupyter + Spark)
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: rag-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./:/home/jovyan/work
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge

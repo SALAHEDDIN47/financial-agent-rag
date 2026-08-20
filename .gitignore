@@ -1,0 +1,183 @@
+# ===============================
+# 1. FICHIERS PYTHON & VIRTUALENV
+# ===============================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+*.cover
+
+# ===============================
+# 2. ENVIRONNEMENT & SENSIBLE DATA
+# ===============================
+# Fichiers de configuration sensibles
+.env
+.env.local
+.env.*.local
+*.secret.yaml
+*.secrets.yaml
+secrets/
+credentials.json
+
+# ===============================
+# 3. DONNÉES DU PROJET (VOLUMINEUX / INDISPENSABLES)
+# ===============================
+# Tous les fichiers bruts, traités et tables extraites
+# ⚠️  Si tu veux conserver la structure des dossiers (mais pas les fichiers),
+#     tu peux commenter les lignes ci-dessous et ajouter des fichiers .gitkeep
+#     dans chaque dossier manuellement.
+data/raw/
+data/processed/
+data/tables/
+data/elasticsearch/
+data/etcd/
+data/milvus/
+data/minio/
+data/minio-milvus/
+
+# Mais si tu souhaites juste ignorer tout le contenu de data/ sauf un .gitkeep :
+# data/*
+# !data/.gitkeep
+
+# Journaux de données spécifiques
+*.log
+*.parquet
+*.feather
+*.arrow
+*.lmdb
+*.sqlite
+*.sqlite3
+*.db
+
+# ===============================
+# 4. SPARK
+# ===============================
+metastore_db/
+derby.log
+spark-warehouse/
+*.iws
+*.ipr
+*.iml
+
+# ===============================
+# 5. NOTEBOOKS JUPYTER
+# ===============================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+*.pyc
+# Optionnel : si tu veux ignorer les notebooks contenant des données brutes en sortie
+# (mais souvent on les garde, donc je ne mets que les checkpoints)
+
+# ===============================
+# 6. IDES & ÉDITEURS
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.ropeproject/
+.project
+.pydevproject
+.settings/
+*.code-workspace
+
+# ===============================
+# 7. OS
+# ===============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===============================
+# 8. DOCKER / KUBERNETES
+# ===============================
+# Volumes Docker locaux (si tu les montes dans ./data, déjà ignoré au-dessus)
+docker-compose.override.yml
+*.tar.gz
+*.tar
+
+# Fichiers temporaires Kubernetes
+*.kubeconfig
+*.kubeconfig.local
+
+# ===============================
+# 9. LOGS & MONITORING
+# ===============================
+logs/
+*.log
+*.tmp
+*.temp
+.prometheus/
+grafana-data/
+
+# ===============================
+# 10. AUTRES (NLP / MODÈLES)
+# ===============================
+# Modèles téléchargés localement (LLM, embeddings)
+models/
+*.bin
+*.onnx
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.pb
+*.tflite
+
+# Dossiers d'index vectoriel locaux (si tu utilises Chroma/LanceDB)
+chroma/
+lancedb/
+
+# ===============================
+# 11. EXPORT RAPPORTS / DOCS GÉNÉRÉS
+# ===============================
+*.pdf
+*.pptx
+*.docx
+!requirements*.txt  # On garde les fichiers de dépendances

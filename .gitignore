@@ -180,4 +180,5 @@ lancedb/
 *.pdf
 *.pptx
 *.docx
-!requirements*.txt  # On garde les fichiers de dépendances
+!requirements*.txt  # On garde les fichiers de dépendancesnotebooks/*.ipynb
+data/

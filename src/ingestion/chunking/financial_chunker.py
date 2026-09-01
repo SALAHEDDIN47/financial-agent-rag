@@ -54,11 +54,19 @@ def chunk_documents(input_dir: Path, output_dir: Path, chunk_size: int = 1200, c
             output_file = output_dir / f"{json_file.stem}_chunks.jsonl"
             with open(output_file, 'w', encoding='utf-8') as f_out:
                 for i, chunk_text in enumerate(chunks):
+                    # ✅ NOUVELLE STRUCTURE : métadonnées au niveau racine
                     chunk_data = {
                         "chunk_id": f"{doc.get('source', 'doc')}_{i:04d}",
                         "text": chunk_text,
+                        # ⬇️ AJOUTEZ CES TROIS LIGNES ⬇️
+                        "company": doc.get("company", "UNKNOWN"),
+                        "period": doc.get("period", "UNKNOWN"),
+                        "document_type": doc.get("document_type", "UNKNOWN"),
+                        # Les métadonnées complémentaires restent dans un sous-dictionnaire
                         "metadata": {
-                            **base_metadata,
+                            "source_file": json_file.name,
+                            "source": doc.get("source", "unknown"),
+                            "file_path": doc.get("metadata", {}).get("file_path", ""),
                             "chunk_index": i,
                             "total_chunks": len(chunks)
                         }

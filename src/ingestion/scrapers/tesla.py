@@ -1,41 +1,28 @@
 from pathlib import Path
-import requests
+import time
+from curl_cffi import requests
 
 def scrape_tesla_presentations(output_dir: str = "data/raw/presentations/tesla"):
     target_path = Path(output_dir)
     target_path.mkdir(parents=True, exist_ok=True)
     
-    print("🚀 Téléchargement direct des présentations Tesla...")
+    print("🚀 Téléchargement des présentations Tesla...")
     
-    # Mapping précis des URLs en fonction du changement de domaine de Tesla
-    # Les rapports 2024 et antérieurs sont sur digitalassets.tesla.com
-    # Les rapports 2025+ sont sur assets-ir.tesla.com
-    quarters_config = [
-        ("Q2-2026", "assets-ir.tesla.com"),
-        ("Q1-2026", "assets-ir.tesla.com"),
-        ("Q4-2025", "assets-ir.tesla.com"),
-        ("Q3-2025", "assets-ir.tesla.com"),
-        ("Q2-2025", "assets-ir.tesla.com"),
-        ("Q1-2025", "assets-ir.tesla.com"),
-        ("Q4-2024", "digitalassets.tesla.com"),  # ⚠️ Ancien domaine
-        ("Q3-2024", "digitalassets.tesla.com"),  # ⚠️ Ancien domaine
-        ("Q2-2024", "digitalassets.tesla.com"),  # ⚠️ Ancien domaine
-        ("Q1-2024", "digitalassets.tesla.com"),  # ⚠️ Ancien domaine
+    quarters = ["Q2-2026", "Q1-2026", "Q4-2025", "Q3-2025", "Q2-2025", "Q1-2025", "Q4-2024", "Q3-2024", "Q2-2024", "Q1-2024"]
+    
+    # Domaines possibles à tester en cas d'échec
+    domains = [
+        "https://assets-ir.tesla.com/tesla-contents/IR/",
+        "https://digitalassets.tesla.com/tesla-contents/image/upload/IR/"
     ]
     
     downloaded_count = 0
     skipped_count = 0
     failed_count = 0
     
-    # Headers réalistes pour éviter tout blocage CDN (Akamai/Cloudflare)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-        "Accept": "application/pdf,*/*",
-        "Referer": "https://ir.tesla.com/",
-        "Origin": "https://ir.tesla.com",
-    }
+    session = requests.Session()
 
-    for quarter, domain in quarters_config:
+    for quarter in quarters:
         file_name = f"TSLA-{quarter}-Update.pdf"
         file_path = target_path / file_name
         
@@ -44,41 +31,43 @@ def scrape_tesla_presentations(output_dir: str = "data/raw/presentations/tesla")
             skipped_count += 1
             continue
         
-        # Construction de l'URL en fonction du domaine correct
-        if domain == "digitalassets.tesla.com":
-            pdf_url = f"https://{domain}/tesla-contents/image/upload/IR/{file_name}"
-        else:
-            pdf_url = f"https://{domain}/tesla-contents/IR/{file_name}"
-            
-        try:
-            print(f"⬇️ Téléchargement : {file_name}...")
-            
-            response = requests.get(pdf_url, headers=headers, timeout=30)
-            
-            # Vérification stricte : code 200 ET contenu de type PDF
-            if response.status_code == 200 and 'application/pdf' in response.headers.get('content-type', ''):
-                with open(file_path, 'wb') as f:
-                    f.write(response.content)
-                print(f"✅ Sauvegardé : {file_name}")
-                downloaded_count += 1
-            elif response.status_code == 404:
-                print(f"⚠️ Non trouvé (404) : {file_name} (n'existe peut-être pas sous ce format)")
-                failed_count += 1
-            else:
-                print(f"⚠️ Échec (HTTP {response.status_code}) : {file_name}")
-                failed_count += 1
+        success = False
+        print(f"⬇️ Téléchargement : {file_name}...")
+        
+        for base_url in domains:
+            pdf_url = f"{base_url}{file_name}"
+            try:
+                response = session.get(
+                    pdf_url, 
+                    impersonate="chrome120", 
+                    headers={"Referer": "https://ir.tesla.com/"},
+                    timeout=20
+                )
                 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Erreur réseau sur {file_name}: {str(e)[:80]}")
+                # Vérification de l'en-tête binaire du PDF (%PDF)
+                if response.status_code == 200 and response.content.startswith(b'%PDF'):
+                    with open(file_path, 'wb') as f:
+                        f.write(response.content)
+                    print(f"✅ Sauvegardé depuis {pdf_url.split('/')[2]} : {file_name}")
+                    downloaded_count += 1
+                    success = True
+                    break
+            except Exception:
+                continue
+        
+        if not success:
+            print(f"⚠️ Échec sur tous les domaines : {file_name} (fichier non valide ou URL modifiée)")
             failed_count += 1
 
+        time.sleep(1)
+
     print(f"\n{'='*60}")
-    print(f"🎉 Mission accomplie !")
-    print(f"   ✅ Nouveaux fichiers téléchargés : {downloaded_count}")
-    print(f"   ⏭️ Fichiers déjà présents (ignorés) : {skipped_count}")
-    print(f"   ⚠️ Échecs / Indisponibles : {failed_count}")
-    print(f"   📁 Dossier de destination : {target_path.absolute()}")
+    print(f"🎉 Bilan final :")
+    print(f"   ✅ Téléchargés : {downloaded_count}")
+    print(f"   ⏭️ Ignorés : {skipped_count}")
+    print(f"   ⚠️ Indisponibles : {failed_count}")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
     scrape_tesla_presentations()
+    

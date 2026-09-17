@@ -29,5 +29,5 @@ def download_sec_reports(tickers: list, doc_type: str = "10-K", limit: int = 1, 
 
 if __name__ == "__main__":
     # Liste de tests (Apple, Tesla)
-    test_tickers = ["AAPL", "TSLA"]
+    test_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT"]
     download_sec_reports(tickers=test_tickers, doc_type="10-K", limit=1)

@@ -47,7 +47,7 @@ class ElasticsearchIndexer:
                     "analyzer": {
                         "financial_analyzer": {
                             "type": "standard",
-                            "stopwords": "_english_"
+                            "stopwords": ["_english_"]
                         }
                     }
                 }
@@ -78,7 +78,7 @@ class ElasticsearchIndexer:
     def index_chunks(self, chunks_dir: str, batch_size: int = 1000):
         """Indexe tous les chunks depuis les fichiers JSONL."""
         chunks_path = Path(chunks_dir)
-        jsonl_files = list(chunks_path.glob("*.jsonl"))
+        jsonl_files = list(chunks_path.rglob("*.jsonl"))
         
         if not jsonl_files:
             logger.error(f"❌ Aucun fichier JSONL trouvé dans {chunks_dir}")

@@ -1,8 +1,19 @@
 # src/ingestion/parsers/pdf_parser.py
-import sys
+"""
+Parser PDF (pdfplumber).
+
+Améliorations :
+  - Idempotence via BaseParser.parse_and_save()
+  - Routing : data/interim/parsed/{company}/{doc_type_slug}/{source}.json
+  - Fix table_idx (affichage 1-based, cohérent avec la liste tables_data)
+  - Détection des sections (Item X, PART I, Risk Factors) → metadata["sections"]
+  - Option preserve_tables, extract_layout
+  - Fallback warning si PDF probablement scanné
+  - ✅ FIX : normalisation des tirets/underscores pour inférer le bon type
+  - ✅ FIX : silence des warnings pdfminer (couleurs CMYK non standard)
+"""
 import logging
 import re
-import json
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -13,51 +24,113 @@ from src.ingestion.parsers.base_parser import BaseParser, ParsedDocument
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# ✅ FIX : silence les warnings bruyants de pdfminer (couleurs CMYK/RGB non standard)
+# Ces warnings n'empêchent pas le parsing, ils polluent juste les logs.
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+logging.getLogger("pdfplumber").setLevel(logging.ERROR)
+
+
+# Mapping document_type → slug de dossier
+DOC_TYPE_TO_FOLDER = {
+    "10-K": "10k",
+    "10-Q": "10q",
+    "presentation_slides": "presentations",
+    "proxy_statement": "proxy",
+    "shareholder_letter": "shareholder-letters",
+    "financial_report": "reports",
+}
+
+
+def _slugify_document_type(doc_type: str) -> str:
+    return DOC_TYPE_TO_FOLDER.get(doc_type, re.sub(r"[^\w]", "-", doc_type.lower()))
+
+
 class PDFParser(BaseParser):
-    def __init__(self, preserve_tables: bool = True):
+    def __init__(self, preserve_tables: bool = True, extract_layout: bool = False):
+        """
+        Paramètres
+        ----------
+        preserve_tables : bool
+            Si True, extrait les tableaux et les ajoute en Markdown en fin de contenu.
+        extract_layout : bool
+            Si True, utilise `extract_text(layout=True)` pour préserver les colonnes.
+            ⚠️ Plus lent et insère beaucoup d'espaces ; à activer seulement si nécessaire.
+        """
         super().__init__(document_type="pdf_document")
         self.preserve_tables = preserve_tables
+        self.extract_layout = extract_layout
 
+    # =========================================================================
+    # MÉTHODE PRINCIPALE
+    # =========================================================================
     def parse(self, file_path: Path) -> ParsedDocument:
         self._validate_file(file_path, ".pdf")
-        
-        # ✅ NOUVEAU : On passe le nom du dossier parent pour mieux détecter l'entreprise
-        meta = self._extract_metadata_from_filename(file_path.name, file_path.parent.name)
-        
-        logger.info(f"📄 Parsing en cours : {file_path.name} (Dossier: {file_path.parent.name})")
-        
+
+        # Métadonnées depuis le chemin (dossier parent = entreprise)
+        meta = self._extract_metadata_from_filename(
+            file_path.name, file_path.parent.name
+        )
+
+        logger.info(f"📄 Parsing PDF : {file_path.name} (dossier: {file_path.parent.name})")
+
         full_text = ""
-        tables_data = []
-        
+        tables_data: List[Dict[str, Any]] = []
+        sections_found: List[Dict[str, Any]] = []
+        total_pages = 0
+
         with pdfplumber.open(file_path) as pdf:
+            total_pages = len(pdf.pages)
+
             for page in pdf.pages:
-                text = page.extract_text() or ""
-                text = re.sub(r'\n{3,}', '\n\n', text).strip()
-                
+                # Extraction du texte
+                if self.extract_layout:
+                    text = page.extract_text(layout=True) or ""
+                else:
+                    text = page.extract_text() or ""
+
+                text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
                 if text:
                     full_text += f"\n\n--- PAGE {page.page_number} ---\n{text}"
-                
+
+                    # Détection des sections (Item X, PART I, Risk Factors, ...)
+                    page_sections = self._detect_sections(text, page.page_number)
+                    if page_sections:
+                        sections_found.extend(page_sections)
+
+                # Extraction des tableaux
                 if self.preserve_tables:
                     tables = page.extract_tables()
-                    for table_idx, table in enumerate(tables):
+                    for table in tables:
                         if table and len(table) > 1:
                             table_md = self._table_to_markdown(table)
-                            tables_data.append({
-                                "page": page.page_number,
-                                "table_idx": table_idx,
-                                "content": table_md
-                            })
-        
+                            tables_data.append(
+                                {
+                                    "page": page.page_number,
+                                    # ✅ FIX : numérotation 1-based cohérente avec l'affichage
+                                    "table_idx": len(tables_data) + 1,
+                                    "content": table_md,
+                                }
+                            )
+
+        # Ajout des tableaux en Markdown en fin de contenu
         if tables_data:
-            full_text += "\n\n" + "="*50 + "\n"
+            full_text += "\n\n" + "=" * 50 + "\n"
             full_text += "DONNÉES TABULAIRES EXTRAITES (Format Markdown)\n"
-            full_text += "="*50 + "\n"
+            full_text += "=" * 50 + "\n"
             for tbl in tables_data:
                 full_text += f"\n[Source: Page {tbl['page']}, Tableau {tbl['table_idx']}]\n"
-                full_text += tbl['content'] + "\n"
-        
+                full_text += tbl["content"] + "\n"
+
+        # Détection PDF probablement scanné (très peu de texte extrait)
+        if total_pages > 0 and len(full_text.strip()) < 200:
+            logger.warning(
+                f"⚠️  {file_path.name} : très peu de texte extrait "
+                f"({len(full_text)} car. pour {total_pages} pages) — PDF probablement scanné."
+            )
+
         doc_type = self._infer_document_type(file_path.name)
-        
+
         return ParsedDocument(
             source=file_path.stem,
             document_type=doc_type,
@@ -65,102 +138,176 @@ class PDFParser(BaseParser):
             period=meta["period"],
             content=full_text.strip(),
             metadata={
-                "total_pages": len(pdf.pages),
+                "total_pages": total_pages,
                 "tables_found": len(tables_data),
+                "sections": sections_found,
                 "file_size_kb": round(file_path.stat().st_size / 1024, 2),
-                "file_path": str(file_path)
+                "file_path": str(file_path),
             },
-            chunks=[]
+            chunks=[],
         )
 
+    # =========================================================================
+    # HELPERS
+    # =========================================================================
     def _table_to_markdown(self, table: List[List[Any]]) -> str:
+        """Convertit un tableau pdfplumber en Markdown, en normalisant la largeur."""
         if not table:
             return ""
-        cleaned_table = [[str(cell).strip() if cell else "" for cell in row] for row in table]
-        max_cols = max(len(row) for row in cleaned_table)
-        for row in cleaned_table:
+
+        cleaned = [
+            [str(cell).strip().replace("\n", " ") if cell else "" for cell in row]
+            for row in table
+        ]
+        max_cols = max(len(row) for row in cleaned)
+        for row in cleaned:
             row.extend([""] * (max_cols - len(row)))
-        
-        header = cleaned_table[0]
+
+        header = cleaned[0]
         separator = ["---"] * max_cols
-        rows = cleaned_table[1:]
-        
+        rows = cleaned[1:]
+
         md_lines = [
             "| " + " | ".join(header) + " |",
-            "| " + " | ".join(separator) + " |"
+            "| " + " | ".join(separator) + " |",
         ]
         for row in rows:
             md_lines.append("| " + " | ".join(row) + " |")
         return "\n".join(md_lines)
 
+    # Patterns de sections financières typiques (10-K, 10-Q, rapports annuels)
+    SECTION_PATTERNS = [
+        # "Item 7. MD&A" / "Item 1A. Risk Factors" / "Item 8."
+        (r"^\s*Item\s+(\d+[A-Z]?)\.\s+(.{3,80})$", "Item"),
+        # "PART I" / "PART II" / "PART IV"
+        (r"^\s*PART\s+([IVX]+)\b(.*)$", "Part"),
+        # Titres récurrents (anglais)
+        (r"^\s*(Risk Factors|Management'?s Discussion|Financial Statements|"
+         r"Quantitative and Qualitative Disclosures|Controls and Procedures)"
+         r"\b.{0,60}$", "Section"),
+    ]
+
+    def _detect_sections(self, page_text: str, page_num: int) -> List[Dict[str, Any]]:
+        """
+        Détecte les titres de sections dans le texte d'une page.
+        Retourne une liste de {type, label, page}.
+        """
+        found = []
+        for line in page_text.split("\n"):
+            line = line.strip()
+            if len(line) < 5 or len(line) > 120:
+                continue
+            for pattern, section_type in self.SECTION_PATTERNS:
+                m = re.match(pattern, line, re.IGNORECASE)
+                if m:
+                    found.append(
+                        {
+                            "type": section_type,
+                            "label": line[:100],
+                            "page": page_num,
+                        }
+                    )
+                    break  # une seule détection par ligne
+        return found
+
     def _infer_document_type(self, filename: str) -> str:
-        name_lower = filename.lower()
-        if "10-k" in name_lower or "annual_report" in name_lower or "annualreport" in name_lower:
+        """
+        ✅ FIX : normalisation des tirets/underscores en espaces pour matcher
+        les deux conventions (annual-report.pdf, annual_report.pdf).
+        """
+        # Normalise "annual-report" et "annual_report" en "annual report"
+        name = filename.lower().replace("-", " ").replace("_", " ")
+
+        if "10 k" in name or "annual report" in name or "annualreport" in name:
             return "10-K"
-        elif "10-q" in name_lower or "earnings_release" in name_lower or "update" in name_lower:
+        elif "10 q" in name or "earnings release" in name or "quarterly" in name:
             return "10-Q"
-        elif "slides" in name_lower or "presentation" in name_lower or "deck" in name_lower:
+        elif "slides" in name or "presentation" in name or "deck" in name:
             return "presentation_slides"
-        elif "proxy" in name_lower:
+        elif "proxy" in name:
             return "proxy_statement"
-        elif "shareholder_letter" in name_lower or "shareholderletter" in name_lower:
+        elif "shareholder letter" in name or "shareholderletter" in name:
             return "shareholder_letter"
-        else:
-            return "financial_report"
+        elif "update" in name:
+            # Tesla "Update" = earnings release trimestriel → 10-Q
+            return "10-Q"
+        return "financial_report"
 
 
+# ==============================================================================
+# EXÉCUTION DIRECTE (idempotente via manifest + routing par company/doc_type)
+# ==============================================================================
 if __name__ == "__main__":
+    import sys
+
     project_root = Path(__file__).parent.parent.parent.parent
     sys.path.insert(0, str(project_root))
-    
-    parser = PDFParser(preserve_tables=True)
-    
-    # ✅ NOUVEAU : On cible le dossier parent qui contient tesla/, microsoft/, alphabet/
+
+    from src.ingestion.parsers.manifest import load_manifest, save_manifest
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    parser = PDFParser(preserve_tables=True, extract_layout=False)
+
     target_dir = Path("data/raw/presentations")
     output_dir = Path("data/interim/parsed")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     if not target_dir.exists():
         logger.error(f"Le dossier {target_dir} n'existe pas.")
-    else:
-        # ✅ NOUVEAU : rglob pour trouver les PDF dans tous les sous-dossiers
-        pdf_files = list(target_dir.rglob("*.pdf"))
-        logger.info(f"🔍 {len(pdf_files)} fichiers PDF trouvés au total dans {target_dir}")
-        
-        # Statistiques par entreprise
-        stats = {}
-        
+        sys.exit(1)
+
+    pdf_files = sorted(target_dir.rglob("*.pdf"))
+    logger.info(f"🔍 {len(pdf_files)} fichiers PDF trouvés dans {target_dir}")
+
+    manifest = load_manifest()
+    stats = {"parsed": 0, "skipped": 0, "failed": 0, "by_company": {}}
+
+    try:
         for pdf_file in pdf_files:
             try:
-                doc = parser.parse(pdf_file)
-                
-                # Création d'un sous-dossier de sortie par entreprise pour bien organiser
-                company_output = output_dir / doc.company.lower()
-                company_output.mkdir(parents=True, exist_ok=True)
-                
-                logger.info(f"✅ [{doc.company}] {doc.source} | Type: {doc.document_type} | "
-                            f"Pages: {doc.metadata['total_pages']} | Tables: {doc.metadata['tables_found']}")
-                
-                output_file = company_output / f"{doc.source}.json"
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "source": doc.source,
-                        "document_type": doc.document_type,
-                        "company": doc.company,
-                        "period": doc.period,
-                        "content": doc.content,
-                        "metadata": doc.metadata
-                    }, f, indent=2, ensure_ascii=False)
-                
-                # Mise à jour des stats
-                stats[doc.company] = stats.get(doc.company, 0) + 1
-                    
+                # Pré-détection du company/doc_type pour calculer le chemin de sortie routé
+                meta = parser._extract_metadata_from_filename(
+                    pdf_file.name, pdf_file.parent.name
+                )
+                doc_type = parser._infer_document_type(pdf_file.name)
+                company_slug = (meta["company"] or "unknown").lower()
+                type_slug = _slugify_document_type(doc_type)
+
+                output_file = (
+                    output_dir / company_slug / type_slug / f"{pdf_file.stem}.json"
+                )
+
+                doc = parser.parse_and_save(pdf_file, output_file, manifest)
+
+                if doc is None:
+                    stats["skipped"] += 1
+                    continue
+
+                logger.info(
+                    f"✅ [{doc.company}] {doc.source} | Type: {doc.document_type} | "
+                    f"Pages: {doc.metadata['total_pages']} | "
+                    f"Tables: {doc.metadata['tables_found']} | "
+                    f"Sections: {len(doc.metadata['sections'])}"
+                )
+                stats["parsed"] += 1
+                stats["by_company"][doc.company] = (
+                    stats["by_company"].get(doc.company, 0) + 1
+                )
+
             except Exception as e:
-                logger.error(f"❌ Échec du parsing de {pdf_file.name} : {e}")
-                
-        logger.info(f"\n{'='*60}")
-        logger.info(f"🎉 Parsing terminé ! Résumé par entreprise :")
-        for company, count in stats.items():
-            logger.info(f"   📊 {company}: {count} fichiers parsés")
-        logger.info(f"📁 Fichiers sauvegardés dans : {output_dir.absolute()}")
-        logger.info(f"{'='*60}")
+                logger.error(f"❌ Échec : {pdf_file.name} → {e}")
+                stats["failed"] += 1
+    finally:
+        save_manifest(manifest)
+
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"🎉 Parsing PDF terminé !")
+    logger.info(f"   ✅ Parsés    : {stats['parsed']}")
+    logger.info(f"   ⏭️  Ignorés  : {stats['skipped']}")
+    logger.info(f"   ❌ Échecs    : {stats['failed']}")
+    logger.info(f"   📊 Par entreprise :")
+    for c, n in sorted(stats["by_company"].items()):
+        logger.info(f"      - {c}: {n} PDF")
+    logger.info(f"   📁 Sortie : {output_dir.absolute()}")
+    logger.info(f"{'=' * 60}")

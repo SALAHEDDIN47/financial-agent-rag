@@ -34,6 +34,19 @@ def reset_elasticsearch():
     except Exception as e:
         logger.error(f"❌ Erreur lors de la réinitialisation d'Elasticsearch : {e}")
 
+def reset_manifests():
+    """Supprime les manifests pour forcer le retraitement complet."""
+    manifests = [
+        Path("data/interim/.parsing_manifest.json"),
+        Path("data/processed/.chunking_manifest.json"),
+        Path("data/processed/.embedding_manifest.json"),
+        Path("data/processed/.milvus_manifest.json"),
+    ]
+    for m in manifests:
+        if m.exists():
+            logger.info(f"🗑️  Suppression du manifest : {m}")
+            m.unlink()
+
 if __name__ == "__main__":
     logger.info("🚀 Démarrage de la réinitialisation des bases de données...")
     reset_milvus()

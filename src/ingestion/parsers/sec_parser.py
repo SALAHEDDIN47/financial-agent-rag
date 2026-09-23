@@ -230,6 +230,7 @@ class SECParser(BaseParser):
 # ==============================================================================
 if __name__ == "__main__":
     import sys
+    import time
 
     project_root = Path(__file__).parent.parent.parent.parent
     sys.path.insert(0, str(project_root))
@@ -254,17 +255,30 @@ if __name__ == "__main__":
     manifest = load_manifest()
     stats = {"parsed": 0, "skipped": 0, "failed": 0, "by_type": {}}
 
+    # --- Checkpoint state ---
+    SAVE_EVERY = 100
+    SAVE_INTERVAL_S = 60
+    ckpt = {"count": 0, "last_save": time.time()}
+
+    def _checkpoint():
+        now = time.time()
+        if (ckpt["count"] >= SAVE_EVERY or 
+            (now - ckpt["last_save"]) >= SAVE_INTERVAL_S):
+            save_manifest(manifest)
+            ckpt["count"] = 0
+            ckpt["last_save"] = now
+            logger.debug(f"💾 Checkpoint : {len(manifest)} entrées")
+
+    interrupted = False
     try:
         for txt_file in txt_files:
             try:
-                # Pré-détection rapide pour construire le chemin de sortie
                 parent_company = txt_file.parent.parent.parent.name
                 meta = parser._extract_metadata_from_filename(
                     txt_file.name, parent_company
                 )
                 company_slug = (meta["company"] or "unknown").lower()
 
-                # On lit le type SEC rapidement (pour construire le chemin)
                 sec_meta = parser._parse_sec_header(txt_file)
                 doc_type_slug = re.sub(
                     r"[^\w]", "-", sec_meta.get("type", "sec").lower()
@@ -293,12 +307,21 @@ if __name__ == "__main__":
                 stats["by_type"][doc.document_type] = (
                     stats["by_type"].get(doc.document_type, 0) + 1
                 )
+                ckpt["count"] += 1
+                _checkpoint()
 
             except Exception as e:
                 logger.error(f"❌ Échec : {txt_file.name} → {e}")
                 stats["failed"] += 1
+    except KeyboardInterrupt:
+        interrupted = True
+        logger.warning("\n⏸️  Ctrl+C détecté — sauvegarde du manifest...")
     finally:
         save_manifest(manifest)
+        logger.info(f"💾 Manifest sauvegardé : {len(manifest)} entrées")
+
+    if interrupted:
+        logger.info("💡 Pour reprendre : uv run ./src/ingestion/parsers/sec_parser.py")
 
     logger.info(f"\n{'=' * 60}")
     logger.info(f"🎉 Parsing SEC terminé !")

@@ -4,20 +4,25 @@ Chunker financier avec :
   - Idempotence via manifest (cohérent avec les parsers)
   - Chunking par TOKENS (adapté à Qwen 2.5)
   - Protection des tableaux Markdown (jamais coupés en plein milieu)
-  - Chunking par sections si `metadata["sections"]` est disponible
   - Propagation du numéro de page (depuis les marqueurs `--- PAGE N ---`)
   - Routing par `{company}/{doc_type}/`
   - Métadonnées enrichies pour le filtrage RAG
+  - ✅ FIX 1 : chunk_id UNIQUE (hash du chemin inclus)
+  - ✅ FIX 2 : source exposé au niveau RACINE (pour indexers Milvus/ES)
+  - ✅ Checkpoints périodiques (tous les 100 fichiers OU 60s)
+  - ✅ Ctrl+C géré proprement
 
 Usage :
     uv run ./src/ingestion/chunking/financial_chunker.py
     uv run ./src/ingestion/chunking/financial_chunker.py --force  # re-chunke tout
 """
 import argparse
+import hashlib
 import json
 import logging
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -32,7 +37,6 @@ try:
     TOKENIZER_NAME = "tiktoken/cl100k_base"
 except ImportError:
     def count_tokens(text: str) -> int:
-        # Heuristique : ~4 caractères par token en anglais
         return max(1, len(text) // 4)
     TOKENIZER_NAME = "heuristic (len/4)"
 
@@ -62,6 +66,11 @@ def _slugify_document_type(doc_type: str) -> str:
     return DOC_TYPE_TO_FOLDER.get(doc_type, re.sub(r"[^\w]", "-", doc_type.lower()))
 
 
+def _short_hash(text: str, length: int = 8) -> str:
+    """Hash court d'une chaîne (pour rendre les chunk_id uniques)."""
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:length]
+
+
 # ==============================================================================
 # SEGMENTATION EN UNITÉS ATOMIQUES
 # ==============================================================================
@@ -73,8 +82,6 @@ def _segment_into_units(text: str) -> List[Dict[str, Any]]:
     Segmente le contenu d'un document en unités atomiques :
       - paragraph : bloc de lignes de texte
       - table     : tableau Markdown complet (ne DOIT pas être coupé)
-    
-    Chaque unité contient {"type", "text", "page"} où page peut être None.
     """
     units: List[Dict[str, Any]] = []
     current_page: Optional[int] = None
@@ -147,12 +154,8 @@ def _split_large_unit(
     max_tokens: int,
     overlap_tokens: int,
 ) -> List[Dict[str, Any]]:
-    """
-    Coupe une unité trop grosse (ex : un tableau de 5000 tokens) en morceaux.
-    ⚠️ Ne s'applique qu'en dernier recours : on essaie d'abord de ne pas couper les tables.
-    """
+    """Coupe une unité trop grosse (ex : un tableau de 5000 tokens) en morceaux."""
     text = unit["text"]
-    # Split naïf par lignes (pour les tables on garde la 1ère ligne comme en-tête)
     lines = text.split("\n")
     sub_chunks = []
     current_lines = []
@@ -170,7 +173,6 @@ def _split_large_unit(
                     "page": unit["page"],
                 }
             )
-            # Reprend avec header + dernières lignes pour l'overlap
             current_lines = [header] if header and header not in current_lines else []
             current_tokens = count_tokens("\n".join(current_lines)) if current_lines else 0
         current_lines.append(line)
@@ -192,10 +194,7 @@ def _group_units_into_chunks(
     max_tokens: int,
     overlap_tokens: int,
 ) -> List[Dict[str, Any]]:
-    """
-    Regroupe les unités en chunks respectant max_tokens, avec overlap.
-    Les tables sont prioritaires : on ne les coupe qu'en dernier recours.
-    """
+    """Regroupe les unités en chunks respectant max_tokens, avec overlap."""
     chunks: List[Dict[str, Any]] = []
     current_units: List[Dict[str, Any]] = []
     current_tokens = 0
@@ -204,30 +203,23 @@ def _group_units_into_chunks(
         if not current_units:
             return
         text = "\n\n".join(u["text"] for u in current_units)
-        # Page = page de la 1ère unité (la plus pertinente pour la citation)
         page = next((u["page"] for u in current_units if u["page"] is not None), None)
         chunks.append({"text": text, "page": page, "unit_count": len(current_units)})
 
     for unit in units:
         unit_tokens = count_tokens(unit["text"])
 
-        # Cas 1 : unité trop grosse → split indépendant
         if unit_tokens > max_tokens:
             flush_current()
             current_units = []
             current_tokens = 0
             sub = _split_large_unit(unit, max_tokens, overlap_tokens)
             for s in sub:
-                chunks.append(
-                    {"text": s["text"], "page": s["page"], "unit_count": 1}
-                )
+                chunks.append({"text": s["text"], "page": s["page"], "unit_count": 1})
             continue
 
-        # Cas 2 : ajouter l'unité dépasse le budget
         if current_tokens + unit_tokens > max_tokens and current_units:
             flush_current()
-
-            # Overlap : garder les dernières unités jusqu'à overlap_tokens
             overlap_units: List[Dict[str, Any]] = []
             overlap_acc = 0
             for u in reversed(current_units):
@@ -236,7 +228,6 @@ def _group_units_into_chunks(
                     break
                 overlap_units.insert(0, u)
                 overlap_acc += u_tok
-
             current_units = overlap_units
             current_tokens = overlap_acc
 
@@ -257,45 +248,36 @@ class FinancialChunker:
         overlap_tokens: int = 80,
         min_chunk_tokens: int = 20,
     ):
-        """
-        Paramètres
-        ----------
-        max_tokens : int
-            Taille cible d'un chunk en tokens (500 ≈ sweet spot pour Qwen 7B/14B).
-        overlap_tokens : int
-            Chevauchement entre chunks (80 tokens ≈ 16% de 500).
-        min_chunk_tokens : int
-            Les chunks plus petits que ça sont fusionnés au chunk précédent ou ignorés.
-        """
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
         self.min_chunk_tokens = min_chunk_tokens
 
     def chunk_document(self, doc: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Découpe un document parsé (dict) en chunks enrichis.
-        Retourne une liste de dicts prêts à sérialiser en JSONL.
-        """
+        """Découpe un document parsé (dict) en chunks enrichis."""
         content = doc.get("content", "")
         if not content or len(content) < 50:
             return []
 
-        # 1. Segmentation en unités (paragraphes + tables)
+        # 1. Segmentation
         units = _segment_into_units(content)
         if not units:
             return []
 
-        # 2. Regroupement en chunks token-aware
-        chunks = _group_units_into_chunks(
-            units, self.max_tokens, self.overlap_tokens
-        )
+        # 2. Regroupement
+        chunks = _group_units_into_chunks(units, self.max_tokens, self.overlap_tokens)
 
-        # 3. Enrichissement des métadonnées
+        # 3. Métadonnées
         doc_metadata = doc.get("metadata", {}) or {}
         source = doc.get("source", "unknown")
         company = doc.get("company", "UNKNOWN")
         period = doc.get("period", "UNKNOWN")
         document_type = doc.get("document_type", "UNKNOWN")
+        file_path = doc_metadata.get("file_path", "")
+
+        # ✅ FIX 1 : hash du chemin pour rendre les chunk_id uniques
+        # Deux fichiers "full-submission.json" (AAPL 10-K et TSLA 10-K) produiront
+        # des chunk_id différents : full-submission_A3F8E2C1_0000 vs full-submission_9B7D41E5_0000
+        path_hash = _short_hash(file_path) if file_path else _short_hash(source)
 
         enriched: List[Dict[str, Any]] = []
         for i, ch in enumerate(chunks):
@@ -303,22 +285,23 @@ class FinancialChunker:
             if count_tokens(text) < self.min_chunk_tokens:
                 continue
 
-            # Détection table-only
             is_table = text.lstrip().startswith("|")
 
             enriched.append(
                 {
-                    "chunk_id": f"{source}_{i:04d}",
+                    # ✅ FIX 1 : chunk_id globalement unique
+                    "chunk_id": f"{source}_{path_hash}_{i:04d}",
                     "text": text,
-                    # Métadonnées de haut niveau (filtrage rapide côté RAG)
+                    # Métadonnées de haut niveau
                     "company": company,
                     "period": period,
                     "document_type": document_type,
+                    # ✅ FIX 2 : source au niveau RACINE (pour indexers)
+                    "source": source,
                     "page": ch["page"],
-                    # Métadonnées secondaires
                     "metadata": {
-                        "source": source,
-                        "file_path": doc_metadata.get("file_path", ""),
+                        "source": source,          # conservé aussi dans metadata
+                        "file_path": file_path,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
                         "token_count": count_tokens(text),
@@ -337,19 +320,25 @@ MANIFEST_PATH = Path("data/processed/.chunking_manifest.json")
 
 def _load_manifest() -> dict:
     if MANIFEST_PATH.exists():
-        return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        try:
+            return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning("⚠️  Manifest corrompu, redémarrage à vide")
+            return {}
     return {}
 
 
 def _save_manifest(manifest: dict) -> None:
+    """Sauvegarde atomique."""
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(
+    tmp = MANIFEST_PATH.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    tmp.replace(MANIFEST_PATH)
 
 
 def _compute_hash(path: Path) -> str:
-    import hashlib
     h = hashlib.md5()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
@@ -362,10 +351,12 @@ def chunk_documents(
     output_dir: Path,
     chunker: FinancialChunker,
     force: bool = False,
+    save_every: int = 100,
+    save_interval_s: int = 60,
 ) -> Dict[str, int]:
     """
-    Parcourt tous les JSON parsés, les chunke, sauvegarde en JSONL.
-    Idempotent : si un doc n'a pas changé, il est ignoré.
+    Parcourt tous les JSON parsés, les chunke, sauvegarde en JSONL (idempotent).
+    ✅ Checkpoints périodiques (N fichiers OU X secondes).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = _load_manifest()
@@ -381,10 +372,22 @@ def chunk_documents(
         "total_chunks": 0,
     }
 
+    # --- Checkpoint state ---
+    ckpt = {"count": 0, "last_save": time.time()}
+
+    def _checkpoint():
+        now = time.time()
+        if (ckpt["count"] >= save_every or 
+            (now - ckpt["last_save"]) >= save_interval_s):
+            _save_manifest(manifest)
+            ckpt["count"] = 0
+            ckpt["last_save"] = now
+            logger.debug(f"💾 Checkpoint chunking : {len(manifest)} entrées")
+
+    interrupted = False
     try:
         for json_file in json_files:
             try:
-                # Lecture du doc pour déterminer le chemin de sortie routé
                 with open(json_file, "r", encoding="utf-8") as f:
                     doc = json.load(f)
 
@@ -395,7 +398,6 @@ def chunk_documents(
 
                 output_file = target_dir / f"{json_file.stem}_chunks.jsonl"
 
-                # --- Vérification idempotente ---
                 key = str(json_file)
                 prev = manifest.get(key)
                 if not force and prev and output_file.exists():
@@ -403,48 +405,52 @@ def chunk_documents(
                         current_hash = _compute_hash(json_file)
                     except (FileNotFoundError, PermissionError):
                         current_hash = None
-                    if (
-                        current_hash
-                        and current_hash == prev.get("source_hash")
-                    ):
+                    if current_hash and current_hash == prev.get("source_hash"):
                         stats["skipped"] += 1
                         continue
 
-                # --- Chunking effectif ---
                 chunks = chunker.chunk_document(doc)
                 if not chunks:
                     stats["empty"] += 1
                     manifest[key] = {
                         "source_hash": _compute_hash(json_file),
                         "chunked_at": datetime.now(timezone.utc)
-                            .isoformat()
-                            .replace("+00:00", "Z"),
+                            .isoformat().replace("+00:00", "Z"),
                         "count": 0,
                         "output": str(output_file),
                     }
+                    ckpt["count"] += 1
+                    _checkpoint()
                     continue
 
                 with open(output_file, "w", encoding="utf-8") as f_out:
                     for chunk in chunks:
                         f_out.write(json.dumps(chunk, ensure_ascii=False) + "\n")
 
-                # --- Mise à jour manifest ---
                 manifest[key] = {
                     "source_hash": _compute_hash(json_file),
                     "chunked_at": datetime.now(timezone.utc)
-                        .isoformat()
-                        .replace("+00:00", "Z"),
+                        .isoformat().replace("+00:00", "Z"),
                     "count": len(chunks),
                     "output": str(output_file),
                 }
                 stats["parsed"] += 1
                 stats["total_chunks"] += len(chunks)
+                ckpt["count"] += 1
+                _checkpoint()
 
             except Exception as e:
                 logger.error(f"❌ Échec : {json_file.name} → {e}")
                 stats["failed"] += 1
+    except KeyboardInterrupt:
+        interrupted = True
+        logger.warning("\n⏸️  Ctrl+C détecté — sauvegarde du manifest...")
     finally:
         _save_manifest(manifest)
+        logger.info(f"💾 Manifest sauvegardé : {len(manifest)} entrées")
+
+    if interrupted:
+        logger.info("💡 Pour reprendre : uv run ./src/ingestion/chunking/financial_chunker.py")
 
     return stats
 
@@ -453,8 +459,6 @@ def chunk_documents(
 # EXÉCUTION DIRECTE
 # ==============================================================================
 if __name__ == "__main__":
-    import sys
-
     project_root = Path(__file__).parent.parent.parent.parent
     sys.path.insert(0, str(project_root))
 
@@ -486,12 +490,14 @@ if __name__ == "__main__":
         f"tokenizer={TOKENIZER_NAME}"
     )
 
+    t0 = time.time()
     stats = chunk_documents(
         input_dir=args.input,
         output_dir=args.output,
         chunker=chunker,
         force=args.force,
     )
+    elapsed = time.time() - t0
 
     logger.info(f"\n{'=' * 60}")
     logger.info(f"🎉 Chunking terminé !")
@@ -500,5 +506,6 @@ if __name__ == "__main__":
     logger.info(f"   📭 Docs vides         : {stats['empty']}")
     logger.info(f"   ❌ Échecs             : {stats['failed']}")
     logger.info(f"   📊 Total chunks créés : {stats['total_chunks']}")
+    logger.info(f"   ⏱️  Temps total       : {elapsed:.1f}s")
     logger.info(f"   📁 Sortie             : {args.output.absolute()}")
     logger.info(f"{'=' * 60}")

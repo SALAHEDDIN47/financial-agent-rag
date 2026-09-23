@@ -1,11 +1,12 @@
 # src/rag/agent.py
-import os
 import logging
 from typing import List, Dict, Optional
+
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama
+
 from src.rag.search_engine import SearchEngine
 from src.rag.query_analyzer import detect_query_type, decompose_query
 
@@ -22,27 +23,27 @@ search_engine = SearchEngine(
 )
 
 llm = ChatOllama(
-    model="mistral",
+    model="qwen2.5:7b",
     temperature=0.0,
     base_url="http://localhost:11434",
 )
 
 
 # ==================== FORMATAGE ====================
-def format_docs(docs: List[Dict], max_chars_per_doc: int = 800) -> str:
+def format_docs(docs: List[Dict], max_chars_per_doc: int = 1200) -> str:
     formatted = []
     for i, doc in enumerate(docs):
         company = doc.get("company", "Unknown")
         period = doc.get("period", "Unknown")
         doc_type = doc.get("document_type", "Unknown")
         text = doc.get("text", "")
-        
-        # ✅ TRONCATURE : garde les 800 premiers caractères
+
         if len(text) > max_chars_per_doc:
             text = text[:max_chars_per_doc] + "... [tronqué]"
-        
+
         formatted.append(
-            f"[Source {i+1}] Entreprise: {company} | Période: {period} | Type: {doc_type}\n"
+            f"[Source {i + 1}] Entreprise: {company} | "
+            f"Période: {period} | Type: {doc_type}\n"
             f"Extrait:\n{text}\n"
         )
     return "\n---\n".join(formatted)
@@ -56,19 +57,22 @@ Tu es un analyste financier expert. Réponds à la question en te basant UNIQUEM
 1. Si l'information existe (même en anglais ou dans un tableau), donne-la.
 2. Synonymes : "chiffre d'affaires" = "revenue", "bénéfice" = "net income".
 3. Lis attentivement les tableaux (lignes ET colonnes).
+4. Si rien n'est trouvé : "Je n'ai pas trouvé cette information dans les documents fournis."
+5. **LANGUE** : Réponds dans la même langue que la question.
+6. Cite tes sources au format [Source X].
 
-4. **DISTINCTION DES PÉRIODES (CRUCIAL)** :
-   - "FY2025" ou "in 2025" = exercice fiscal complet (année)
-   - "Q1 2025", "Q4 2025" = trimestre spécifique
-   - "in 2025" ≠ "Q4 2025"
-   - Si la question demande FY2025 mais que tu n'as qu'un chiffre trimestriel, 
-     écris : "Seul un chiffre trimestriel est disponible : [chiffre] (Q4 2025). 
-     Le chiffre annuel FY2025 n'est pas dans les sources."
-   - Ne JAMAIS présenter un chiffre trimestriel comme un chiffre annuel.
+**UNITÉS (CRUCIAL)** :
+- Tableaux 10-K/10-Q : montants en **millions USD** ("in millions")
+  → "$17,693" = 17,693 millions = **17.7 milliards de dollars**
+- Les revenus des grandes entreprises (Apple, Tesla, Google, Microsoft) se lisent en **milliards**
+- Écris toujours les 2 formes : "17,693 M USD (17.7 Md USD)"
+- Rappel : 1 000 = 1K ; 1 000 000 = 1M ; 1 000 000 000 = 1B = 1 milliard
 
-5. Si rien n'est trouvé : "Je n'ai pas trouvé cette information dans les documents fournis."
-6. **LANGUE** : Réponds dans la même langue que la question.
-7. Cite tes sources au format [Source X].
+**DISTINCTION DES PÉRIODES (CRUCIAL)** :
+- "FY2025" / "in 2025" = exercice fiscal complet
+- "Q1 2025" / "Q4 2025" = trimestre spécifique
+- Si la question demande un trimestre ET que tu as le trimestre → **réponds directement**, sans mentionner de différence FY vs Q
+- Si la question demande l'année ET que tu n'as que le trimestre → signale la différence
 
 Documents de contexte :
 {context}
@@ -118,7 +122,6 @@ Question : {question}
 Réponse :
 """
 
-
 RISK_PROMPT = """
 Tu es un analyste financier expert. Tu dois extraire et synthétiser les **facteurs de risque** à partir des documents fournis.
 
@@ -143,28 +146,33 @@ def ask_financial_agent(
     top_k: int = 5,
     filters: Optional[Dict] = None,
     force_simple: bool = False,
-) -> tuple:
+):
     """
-    Retourne (answer, sources_utilisees).
+    Retourne (answer: str, sources: List[Dict]).
     """
     logger.info(f"🔍 Question reçue : '{question}'")
 
-    analysis = detect_query_type(question) if not force_simple else {"needs_decomposition": False}
+    analysis = (
+        detect_query_type(question)
+        if not force_simple
+        else {"needs_decomposition": False}
+    )
 
     # --- CAS SIMPLE ---
     if not analysis.get("needs_decomposition", False):
         docs = search_engine.search_hybrid(question, top_k=top_k, filters=filters)
         if not docs:
             return "Aucun document pertinent trouvé.", []
+
         context = format_docs(docs)
         prompt = ChatPromptTemplate.from_template(SIMPLE_PROMPT)
         chain = prompt | llm | StrOutputParser()
         answer = chain.invoke({"context": context, "question": question})
-        return answer, docs  # ← on retourne les docs réellement utilisés
+        return answer, docs
 
     # --- CAS COMPLEXE ---
     sub_queries = decompose_query(question, llm)
-    
+
     all_docs_by_query = []
     all_docs_flat = []
     for sq in sub_queries:
@@ -172,10 +180,14 @@ def ask_financial_agent(
         sub_filters = dict(filters) if filters else {}
         if sq.get("company"):
             sub_filters["company"] = sq["company"]
-        
-        docs = search_engine.search_hybrid(sub_q, top_k=top_k , filters=sub_filters or None)
-        all_docs_by_query.append({"sub_query": sub_q, "company": sq.get("company"), "docs": docs})
-        all_docs_flat.extend(docs)  # ← accumule pour les sources
+
+        docs = search_engine.search_hybrid(
+            sub_q, top_k=top_k, filters=sub_filters or None
+        )
+        all_docs_by_query.append(
+            {"sub_query": sub_q, "company": sq.get("company"), "docs": docs}
+        )
+        all_docs_flat.extend(docs)
 
     # Déduplication
     seen = set()
@@ -192,7 +204,7 @@ def ask_financial_agent(
     # Construction du contexte groupé
     context_parts = []
     for i, item in enumerate(all_docs_by_query):
-        header = f"### Sous-question {i+1} : {item['sub_query']}"
+        header = f"### Sous-question {i + 1} : {item['sub_query']}"
         if item.get("company"):
             header += f" (Entreprise : {item['company']})"
         context_parts.append(header)
@@ -209,21 +221,22 @@ def ask_financial_agent(
 
     chain = prompt | llm | StrOutputParser()
     answer = chain.invoke({"context": context, "question": question})
-    return answer, unique_docs  # ← retourne les vraies sources
+    return answer, unique_docs
 
 
 # ==================== TEST ====================
 if __name__ == "__main__":
     queries = [
-        "What was Google's GAAP operating income in 2025?",
-        "Compare Alphabets and Microsoft revenue in Q1 2025",
+        "What was Tesla Q4 2025 revenue?",
+        "Compare Alphabet and Microsoft revenue in Q1 2025",
         "Quels sont les principaux facteurs de risque mentionnés dans le 10-K de Tesla 2025 ?",
     ]
 
     for q in queries:
         print("\n" + "=" * 70)
-        print(f"❓ QUESTION : {q}")
+        print(f"❓ {q}")
         print("=" * 70)
-        answer = ask_financial_agent(q, top_k=5)
+        answer, sources = ask_financial_agent(q, top_k=5)
         print(answer)
+        print(f"\n[SOURCES: {len(sources)}]")
         print()

@@ -399,6 +399,7 @@ class JSONParser(BaseParser):
 # ==============================================================================
 if __name__ == "__main__":
     import sys
+    import time
 
     project_root = Path(__file__).parent.parent.parent.parent
     sys.path.insert(0, str(project_root))
@@ -419,6 +420,21 @@ if __name__ == "__main__":
     manifest = load_manifest()
     stats = {"parsed_files": 0, "skipped_files": 0, "parsed_docs": 0, "failed": 0}
 
+    # --- Checkpoint state ---
+    SAVE_EVERY = 100
+    SAVE_INTERVAL_S = 60
+    ckpt = {"count": 0, "last_save": time.time()}
+
+    def _checkpoint():
+        now = time.time()
+        if (ckpt["count"] >= SAVE_EVERY or 
+            (now - ckpt["last_save"]) >= SAVE_INTERVAL_S):
+            save_manifest(manifest)
+            ckpt["count"] = 0
+            ckpt["last_save"] = now
+            logger.debug(f"💾 Checkpoint : {len(manifest)} entrées")
+
+    interrupted = False
     try:
         for json_file in json_files:
             try:
@@ -441,10 +457,19 @@ if __name__ == "__main__":
                     f"✅ {json_file.name} → {len(docs)} doc(s) "
                     f"[{', '.join(doc_types)}] companies={companies}"
                 )
+                ckpt["count"] += 1
+                _checkpoint()
             else:
                 stats["skipped_files"] += 1
+    except KeyboardInterrupt:
+        interrupted = True
+        logger.warning("\n⏸️  Ctrl+C détecté — sauvegarde du manifest...")
     finally:
         save_manifest(manifest)
+        logger.info(f"💾 Manifest sauvegardé : {len(manifest)} entrées")
+
+    if interrupted:
+        logger.info("💡 Pour reprendre : uv run ./src/ingestion/parsers/json_parser.py")
 
     logger.info(f"\n{'=' * 60}")
     logger.info(f"🎉 Parsing JSON terminé !")

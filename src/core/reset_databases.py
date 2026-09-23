@@ -48,7 +48,7 @@ def reset_manifests():
             m.unlink()
 
 if __name__ == "__main__":
-    logger.info("🚀 Démarrage de la réinitialisation des bases de données...")
-    reset_milvus()
-    reset_elasticsearch()
-    logger.info("🎉 Réinitialisation terminée ! Vous pouvez relancer votre pipeline d'ingestion.")
+    confirm = input("⚠️  Cela va TOUT supprimer. Taper 'RESET' pour confirmer : ")
+    if confirm != "RESET":
+        logger.info("Annulé.")
+        sys.exit(0)

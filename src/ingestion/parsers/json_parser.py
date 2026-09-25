@@ -393,89 +393,134 @@ class JSONParser(BaseParser):
             return match.group(1)
         return "UNKNOWN"
 
+    def parse_file_and_save_to_storage(
+        self,
+        source_key: str,
+        manifest: dict,
+        force: bool = False,
+    ) -> List[ParsedDocument]:
+        """
+        Wrapper S3 pour JSON multi-documents.
+        """
+        from src.core.storage import compute_key_hash, storage
+        from datetime import datetime, timezone
+        import re as _re
+
+        prev = manifest.get(source_key)
+
+        # 1. Idempotence
+        if not force and prev:
+            try:
+                current_hash = compute_key_hash(source_key)
+            except Exception:
+                current_hash = None
+            if current_hash and current_hash == prev.get("source_hash"):
+                outputs = prev.get("outputs", [])
+                if outputs and all(storage.exists(k) for k in outputs):
+                    logger.debug(f"⏭️  Ignoré : {source_key}")
+                    return []
+
+        # 2. Download + parse
+        with storage.open_local_temp(source_key) as local_path:
+            docs = self.parse_file(local_path)
+
+        # 3. Delete anciens outputs
+        if prev and prev.get("outputs"):
+            for old_key in prev["outputs"]:
+                if storage.exists(old_key):
+                    try:
+                        storage.delete(old_key)
+                    except Exception as e:
+                        logger.warning(f"Suppression {old_key} échouée : {e}")
+
+        # 4. Upload
+        source_hash = compute_key_hash(source_key) if docs else None
+        parsed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        if not docs:
+            manifest[source_key] = {
+                "source_hash": source_hash,
+                "parsed_at": parsed_at,
+                "outputs": [],
+                "count": 0,
+                "document_types": [],
+            }
+            return []
+
+        output_keys = []
+        doc_types = set()
+        for doc in docs:
+            doc.metadata["source_hash"] = source_hash
+            doc.metadata["source_key"] = source_key
+            doc.metadata["parsed_at"] = parsed_at
+            doc_types.add(doc.document_type)
+
+            company_slug = (doc.company or "unknown").lower()
+            type_slug = _slugify_document_type(doc.document_type)
+            safe_source = _re.sub(r"[^\w\-_.]", "_", doc.source)
+            out_key = f"parsed-documents/{company_slug}/{type_slug}/{safe_source}.json"
+
+            storage.write_json(out_key, self._doc_to_dict(doc))
+            output_keys.append(out_key)
+
+        manifest[source_key] = {
+            "source_hash": source_hash,
+            "parsed_at": parsed_at,
+            "outputs": output_keys,
+            "count": len(docs),
+            "document_types": sorted(doc_types),
+        }
+        return docs
+
 
 # ==============================================================================
 # EXÉCUTION DIRECTE (avec idempotence via manifest)
 # ==============================================================================
 if __name__ == "__main__":
-    import sys
-    import time
-
-    project_root = Path(__file__).parent.parent.parent.parent
-    sys.path.insert(0, str(project_root))
-
+    from src.core.storage import storage
     from src.ingestion.parsers.manifest import load_manifest, save_manifest
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     parser = JSONParser()
-
-    raw_dir = Path("data/raw")
-    output_dir = Path("data/interim/parsed")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    json_files = sorted(raw_dir.rglob("*.json"))
-    logger.info(f"🔍 {len(json_files)} fichiers JSON trouvés dans {raw_dir}")
-
     manifest = load_manifest()
+
+    # Sources : finqa, news, transcripts
+    prefixes = [
+        "raw-documents/finqa/",
+        "raw-documents/news/",
+        "raw-documents/transcripts/",
+    ]
+    source_keys = []
+    for prefix in prefixes:
+        source_keys.extend(
+            k for k in storage.list(prefix) if k.lower().endswith(".json")
+        )
+
+    logger.info(f"🔍 {len(source_keys)} fichiers JSON à parser")
+    for k in source_keys:
+        logger.info(f"   • {k}")
+
     stats = {"parsed_files": 0, "skipped_files": 0, "parsed_docs": 0, "failed": 0}
+    for src in source_keys:
+        try:
+            docs = parser.parse_file_and_save_to_storage(src, manifest)
+        except Exception as e:
+            logger.error(f"❌ Échec {src} : {e}")
+            stats["failed"] += 1
+            continue
 
-    # --- Checkpoint state ---
-    SAVE_EVERY = 100
-    SAVE_INTERVAL_S = 60
-    ckpt = {"count": 0, "last_save": time.time()}
+        if docs:
+            stats["parsed_files"] += 1
+            stats["parsed_docs"] += len(docs)
+            companies = sorted({d.company for d in docs})
+            logger.info(f"✅ {src} → {len(docs)} docs [{companies}]")
+        else:
+            stats["skipped_files"] += 1
 
-    def _checkpoint():
-        now = time.time()
-        if (ckpt["count"] >= SAVE_EVERY or 
-            (now - ckpt["last_save"]) >= SAVE_INTERVAL_S):
-            save_manifest(manifest)
-            ckpt["count"] = 0
-            ckpt["last_save"] = now
-            logger.debug(f"💾 Checkpoint : {len(manifest)} entrées")
-
-    interrupted = False
-    try:
-        for json_file in json_files:
-            try:
-                docs = parser.parse_file_and_save(
-                    source=json_file,
-                    output_dir=output_dir,
-                    manifest=manifest,
-                )
-            except Exception as e:
-                logger.error(f"❌ Échec : {json_file.name} → {e}")
-                stats["failed"] += 1
-                continue
-
-            if docs:
-                stats["parsed_files"] += 1
-                stats["parsed_docs"] += len(docs)
-                doc_types = sorted(set(d.document_type for d in docs))
-                companies = sorted(set(d.company for d in docs))
-                logger.info(
-                    f"✅ {json_file.name} → {len(docs)} doc(s) "
-                    f"[{', '.join(doc_types)}] companies={companies}"
-                )
-                ckpt["count"] += 1
-                _checkpoint()
-            else:
-                stats["skipped_files"] += 1
-    except KeyboardInterrupt:
-        interrupted = True
-        logger.warning("\n⏸️  Ctrl+C détecté — sauvegarde du manifest...")
-    finally:
-        save_manifest(manifest)
-        logger.info(f"💾 Manifest sauvegardé : {len(manifest)} entrées")
-
-    if interrupted:
-        logger.info("💡 Pour reprendre : uv run ./src/ingestion/parsers/json_parser.py")
-
-    logger.info(f"\n{'=' * 60}")
-    logger.info(f"🎉 Parsing JSON terminé !")
-    logger.info(f"   ✅ Fichiers parsés   : {stats['parsed_files']}")
-    logger.info(f"   ⏭️  Fichiers ignorés : {stats['skipped_files']}")
-    logger.info(f"   📊 Total docs créés  : {stats['parsed_docs']}")
-    logger.info(f"   ❌ Échecs            : {stats['failed']}")
-    logger.info(f"   📁 Sortie            : {output_dir.absolute()}")
-    logger.info(f"{'=' * 60}")
+    save_manifest(manifest)
+    logger.info(
+        f"\n🎉 JSON : files={stats['parsed_files']} | "
+        f"docs={stats['parsed_docs']} | "
+        f"skipped={stats['skipped_files']} | failed={stats['failed']}"
+    )

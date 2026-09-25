@@ -25,8 +25,15 @@ RUN pip install --no-cache-dir \
     sec-edgar-downloader \
     playwright \
     undetected-playwright \
-    python-dotenv
-
+    python-dotenv \
+    pdfplumber \
+    pymupdf \
+    python-docx \
+    beautifulsoup4 \
+    lxml \
+    tiktoken \
+    langchain-text-splitters
+    
 RUN playwright install --with-deps chromium
 
 WORKDIR /app

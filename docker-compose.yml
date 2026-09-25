@@ -117,13 +117,15 @@ services:
     image: financial-agent-rag-spark:latest
     container_name: rag-spark-master
     environment:
+      <<: *common-env                    # ← AJOUTER cette ligne
       SPARK_MODE: master
+      STORAGE_BACKEND: minio             # ← AJOUTER
     ports:
       - "8080:8080"
       - "7077:7077"
     volumes:
       - ./spark_jobs:/app/spark_jobs
-      - ./src/ingestion:/app/src/ingestion:ro
+      - ./src:/app/src                   # ← AJOUTER (hot-reload + imports)
       - ./data:/app/data
     networks: [rag-network]
     command: >
@@ -136,13 +138,15 @@ services:
       dockerfile: docker/Dockerfile.spark
     image: financial-agent-rag-spark:latest
     environment:
+      <<: *common-env                    # ← AJOUTER cette ligne
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_MEMORY: 4G
       SPARK_WORKER_CORES: 2
+      STORAGE_BACKEND: minio             # ← AJOUTER
     volumes:
       - ./spark_jobs:/app/spark_jobs
-      - ./src/ingestion:/app/src/ingestion:ro
+      - ./src:/app/src                   # ← AJOUTER (au lieu de src/ingestion seul)
       - ./data:/app/data
     depends_on: [spark-master]
     networks: [rag-network]

@@ -4,18 +4,19 @@ FROM apache/spark:3.5.3-python3
 USER root
 ENV PYTHONPATH=/app SPARK_HOME=/opt/spark
 
-# JARs S3A (Hadoop + AWS SDK)
+# JARs S3A (Hadoop + AWS SDK) — déjà présents chez toi
 RUN curl -L -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
       https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
     && curl -L -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
       https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
 
-      
-# Mettre à jour pip pour élargir le catalogue de versions visibles
 RUN pip install --no-cache-dir --upgrade pip
 
-# Dépendances de parsing — AUCUN pin (laisse pip résoudre)
+# Dépendances parsing + S3 + settings (comme le collector)
 RUN pip install --no-cache-dir \
+    pydantic-settings \
+    boto3 \
+    requests \
     pdfplumber \
     pymupdf \
     python-docx \
@@ -26,9 +27,10 @@ RUN pip install --no-cache-dir \
     langchain-text-splitters
 
 WORKDIR /app
-COPY src/__init__.py            ./src/__init__.py
-COPY src/ingestion/             ./src/ingestion/
-COPY spark_jobs/                ./spark_jobs/
+
+# ⚠️ Copier TOUT src/ pour que les imports `src.core.storage` fonctionnent
+COPY src/ ./src/
+COPY spark_jobs/ ./spark_jobs/
 
 EXPOSE 8080 7077 8081
 USER spark

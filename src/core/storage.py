@@ -10,6 +10,9 @@ Choix via variable d'env STORAGE_BACKEND (défaut : "minio").
 """
 from __future__ import annotations
 
+import os
+import shutil
+import hashlib
 import io
 import json
 import tempfile
@@ -147,20 +150,32 @@ class Storage:
     @contextmanager
     def open_local_temp(self, key: str) -> Iterator[Path]:
         """
-        Télécharge l'objet dans un fichier temporaire et yield son Path.
-        Nettoie automatiquement après usage.
-
-        Utile pour les parsers existants qui attendent un `Path` en entrée.
+        Télécharge l'objet dans un dossier temporaire en PRÉSERVANT
+        l'intégralité du chemin (relatif au bucket) — indispensable pour
+        que les parsers extraient company/period depuis l'arborescence.
         """
-        suffix = Path(key).suffix
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="rag_parse_"))
+        # Garde le chemin complet sans le nom du bucket
+        _, subpath = self._split_key(key)
+        tmp_path = tmp_dir / subpath
         try:
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path.write_bytes(self.read_bytes(key))
             yield tmp_path
         finally:
-            tmp_path.unlink(missing_ok=True)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ⚠️ SUPPRIMER la méthode compute_key_hash d'ici
 
 
 # Singleton
 storage = Storage()
+
+
+# ============================================================
+# FONCTION MODULE-LEVEL (hors classe)
+# ============================================================
+def compute_key_hash(key: str) -> str:
+    """MD5 du contenu d'un objet dans MinIO / local."""
+    data = storage.read_bytes(key)
+    return hashlib.md5(data).hexdigest()

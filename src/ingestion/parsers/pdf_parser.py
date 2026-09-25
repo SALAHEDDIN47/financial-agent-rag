@@ -211,16 +211,13 @@ class PDFParser(BaseParser):
         return found
 
     def _infer_document_type(self, filename: str) -> str:
-        """
-        ✅ FIX : normalisation des tirets/underscores en espaces pour matcher
-        les deux conventions (annual-report.pdf, annual_report.pdf).
-        """
-        # Normalise "annual-report" et "annual_report" en "annual report"
         name = filename.lower().replace("-", " ").replace("_", " ")
 
-        if "10 k" in name or "annual report" in name or "annualreport" in name:
+        if ("10 k" in name or "10k" in name
+                or "annual report" in name or "annualreport" in name):
             return "10-K"
-        elif "10 q" in name or "earnings release" in name or "quarterly" in name:
+        elif ("10 q" in name or "10q" in name
+              or "earnings release" in name or "quarterly" in name):
             return "10-Q"
         elif "slides" in name or "presentation" in name or "deck" in name:
             return "presentation_slides"
@@ -229,109 +226,60 @@ class PDFParser(BaseParser):
         elif "shareholder letter" in name or "shareholderletter" in name:
             return "shareholder_letter"
         elif "update" in name:
-            # Tesla "Update" = earnings release trimestriel → 10-Q
             return "10-Q"
         return "financial_report"
+
+    def _compute_output_key(self, source_key: str) -> str:
+        parts = source_key.split("/")
+        filename = parts[-1]
+        parent_folder = parts[-2] if len(parts) >= 2 else ""
+        meta = self._extract_metadata_from_filename(filename, parent_folder)
+        doc_type = self._infer_document_type(filename)
+        company_slug = (meta["company"] or "unknown").lower()
+        type_slug = _slugify_document_type(doc_type)
+        stem = Path(filename).stem
+        return f"parsed-documents/{company_slug}/{type_slug}/{stem}.json"
 
 
 # ==============================================================================
 # EXÉCUTION DIRECTE (idempotente via manifest + routing par company/doc_type)
 # ==============================================================================
 if __name__ == "__main__":
-    import sys
-    import time
-
-    project_root = Path(__file__).parent.parent.parent.parent
-    sys.path.insert(0, str(project_root))
-
+    from src.core.storage import storage
     from src.ingestion.parsers.manifest import load_manifest, save_manifest
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     parser = PDFParser(preserve_tables=True, extract_layout=False)
-
-    target_dir = Path("data/raw/presentations")
-    output_dir = Path("data/interim/parsed")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if not target_dir.exists():
-        logger.error(f"Le dossier {target_dir} n'existe pas.")
-        sys.exit(1)
-
-    pdf_files = sorted(target_dir.rglob("*.pdf"))
-    logger.info(f"🔍 {len(pdf_files)} fichiers PDF trouvés dans {target_dir}")
-
     manifest = load_manifest()
-    stats = {"parsed": 0, "skipped": 0, "failed": 0, "by_company": {}}
 
-    # --- Checkpoint state ---
-    SAVE_EVERY = 100
-    SAVE_INTERVAL_S = 60
-    ckpt = {"count": 0, "last_save": time.time()}
+    # Tous les PDFs sous raw-documents/presentations/
+    source_keys = [
+        k for k in storage.list("raw-documents/presentations/")
+        if k.lower().endswith(".pdf")
+    ]
+    logger.info(f"🔍 {len(source_keys)} PDFs à parser")
 
-    def _checkpoint():
-        now = time.time()
-        if (ckpt["count"] >= SAVE_EVERY or 
-            (now - ckpt["last_save"]) >= SAVE_INTERVAL_S):
-            save_manifest(manifest)
-            ckpt["count"] = 0
-            ckpt["last_save"] = now
-            logger.debug(f"💾 Checkpoint : {len(manifest)} entrées")
+    stats = {"parsed": 0, "skipped": 0, "failed": 0}
+    for src in source_keys:
+        try:
+            doc = parser.parse_and_save_to_storage(src, manifest)
+            if doc is None:
+                stats["skipped"] += 1
+                continue
+            logger.info(
+                f"✅ [{doc.company}] {src} | "
+                f"Type={doc.document_type} | "
+                f"Pages={doc.metadata.get('total_pages')} | "
+                f"Tables={doc.metadata.get('tables_found')}"
+            )
+            stats["parsed"] += 1
+        except Exception as e:
+            logger.error(f"❌ Échec {src} : {e}")
+            stats["failed"] += 1
 
-    interrupted = False
-    try:
-        for pdf_file in pdf_files:
-            try:
-                meta = parser._extract_metadata_from_filename(
-                    pdf_file.name, pdf_file.parent.name
-                )
-                doc_type = parser._infer_document_type(pdf_file.name)
-                company_slug = (meta["company"] or "unknown").lower()
-                type_slug = _slugify_document_type(doc_type)
-
-                output_file = (
-                    output_dir / company_slug / type_slug / f"{pdf_file.stem}.json"
-                )
-
-                doc = parser.parse_and_save(pdf_file, output_file, manifest)
-
-                if doc is None:
-                    stats["skipped"] += 1
-                    continue
-
-                logger.info(
-                    f"✅ [{doc.company}] {doc.source} | Type: {doc.document_type} | "
-                    f"Pages: {doc.metadata['total_pages']} | "
-                    f"Tables: {doc.metadata['tables_found']} | "
-                    f"Sections: {len(doc.metadata['sections'])}"
-                )
-                stats["parsed"] += 1
-                stats["by_company"][doc.company] = (
-                    stats["by_company"].get(doc.company, 0) + 1
-                )
-                ckpt["count"] += 1
-                _checkpoint()
-
-            except Exception as e:
-                logger.error(f"❌ Échec : {pdf_file.name} → {e}")
-                stats["failed"] += 1
-    except KeyboardInterrupt:
-        interrupted = True
-        logger.warning("\n⏸️  Ctrl+C détecté — sauvegarde du manifest...")
-    finally:
-        save_manifest(manifest)
-        logger.info(f"💾 Manifest sauvegardé : {len(manifest)} entrées")
-
-    if interrupted:
-        logger.info("💡 Pour reprendre : uv run ./src/ingestion/parsers/pdf_parser.py")
-
-    logger.info(f"\n{'=' * 60}")
-    logger.info(f"🎉 Parsing PDF terminé !")
-    logger.info(f"   ✅ Parsés    : {stats['parsed']}")
-    logger.info(f"   ⏭️  Ignorés  : {stats['skipped']}")
-    logger.info(f"   ❌ Échecs    : {stats['failed']}")
-    logger.info(f"   📊 Par entreprise :")
-    for c, n in sorted(stats["by_company"].items()):
-        logger.info(f"      - {c}: {n} PDF")
-    logger.info(f"   📁 Sortie : {output_dir.absolute()}")
-    logger.info(f"{'=' * 60}")
+    save_manifest(manifest)
+    logger.info(
+        f"\n🎉 PDF : parsed={stats['parsed']} | "
+        f"skipped={stats['skipped']} | failed={stats['failed']}"
+    )

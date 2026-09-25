@@ -8,6 +8,8 @@ Fonctionnalités clés :
   - needs_parsing() : décision "parser ou ignorer"
   - BaseParser.parse_and_save() : wrapper idempotent (parse → save → manifest)
 """
+
+from src.core.storage import storage, compute_key_hash
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -240,4 +242,77 @@ class BaseParser(ABC):
             "document_type": doc.document_type,
         }
 
+        return doc
+
+    @staticmethod
+    def _utc_now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _doc_to_dict(self, doc: "ParsedDocument") -> dict:
+        return {
+            "source": doc.source,
+            "document_type": doc.document_type,
+            "company": doc.company,
+            "period": doc.period,
+            "content": doc.content,
+            "metadata": doc.metadata,
+        }
+
+    def _compute_output_key(self, source_key: str) -> str:
+        """
+        À surcharger dans chaque parser.
+        Retourne la clé MinIO de sortie (parsed-documents/...).
+        """
+        raise NotImplementedError
+
+    def parse_and_save_to_storage(
+        self,
+        source_key: str,
+        manifest: dict,
+        force: bool = False,
+    ) -> Optional["ParsedDocument"]:
+        """
+        Wrapper idempotent S3 :
+          1. Skip si hash inchangé + output existe.
+          2. Télécharge la source en temp → parse.
+          3. Upload le JSON vers parsed-documents/.
+          4. Met à jour le manifest.
+        """
+        # 1. Idempotence
+        prev = manifest.get(source_key)
+        if not force and prev:
+            try:
+                current_hash = compute_key_hash(source_key)
+            except Exception:
+                current_hash = None
+            if current_hash and current_hash == prev.get("source_hash"):
+                prev_out = prev.get("output")
+                if prev_out and storage.exists(prev_out):
+                    logger.debug(f"⏭️  Ignoré (déjà parsé) : {source_key}")
+                    return None
+
+        # 2. Download + parse
+        with storage.open_local_temp(source_key) as local_path:
+            doc = self.parse(local_path)
+
+        # 3. Enrichir + output key
+        output_key = self._compute_output_key(source_key)
+        source_hash = compute_key_hash(source_key)
+        parsed_at = self._utc_now_iso()
+
+        doc.metadata["source_hash"] = source_hash
+        doc.metadata["source_key"] = source_key
+        doc.metadata["parsed_at"] = parsed_at
+        doc.metadata["file_path"] = source_key  # remplace le chemin temp
+
+        # 4. Upload
+        storage.write_json(output_key, self._doc_to_dict(doc))
+
+        # 5. Manifest
+        manifest[source_key] = {
+            "source_hash": source_hash,
+            "parsed_at": parsed_at,
+            "output": output_key,
+            "document_type": doc.document_type,
+        }
         return doc

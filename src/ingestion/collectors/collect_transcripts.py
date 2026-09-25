@@ -45,7 +45,8 @@ def download_transcripts(
 
         quarter = row.get("quarter")
         year = row.get("earnings_year")
-        filename = f"{ticker}_Q{quarter}_{year}_transcript.json"
+        q = str(row.get("quarter", "")).lstrip("Q") or "?"
+        filename = f"{ticker}_Q{q}_{year}_transcript.json"
         key = f"{BUCKET_PREFIX}/{filename}"
 
         if not force and storage.exists(key):

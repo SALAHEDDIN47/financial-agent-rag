@@ -1,23 +1,33 @@
-version: '3.8'
+x-common-env: &common-env
+  MILVUS_HOST: milvus
+  MILVUS_PORT: "19530"
+  MILVUS_COLLECTION: financial_chunks
+  ELASTICSEARCH_HOST: http://elasticsearch:9200
+  ELASTICSEARCH_INDEX: financial_chunks_bm25
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: admin
+  MINIO_SECRET_KEY: password123
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
+  LLM_MODEL: qwen2.5:7b
+  EMBEDDING_MODEL: BAAI/bge-large-en-v1.5
+  RERANKER_MODEL: BAAI/bge-reranker-base
 
 services:
-  # 1. MinIO (Stockage Objet S3-compatible)
+  # ==========================================================================
+  # INFRASTRUCTURE
+  # ==========================================================================
   minio:
     image: minio/minio:latest
     container_name: rag-minio
-    ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # Console Web
+    ports: ["9000:9000", "9001:9001"]
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: password123
     volumes:
       - ./data/minio:/data
     command: server /data --console-address ":9001"
-    networks:
-      - rag-network
+    networks: [rag-network]
 
-  # 2. Elasticsearch (Recherche lexicale BM25)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: rag-elasticsearch
@@ -25,27 +35,25 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    ports:
-      - "9200:9200"
+    ports: ["9200:9200"]
     volumes:
       - ./data/elasticsearch:/usr/share/elasticsearch/data
-    networks:
-      - rag-network
+    networks: [rag-network]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
-  # 3. Kibana (Optionnel, pour visualiser ES)
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.0
     container_name: rag-kibana
-    ports:
-      - "5601:5601"
+    ports: ["5601:5601"]
     environment:
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
-    networks:
-      - rag-network
-    depends_on:
-      - elasticsearch
+    networks: [rag-network]
+    depends_on: [elasticsearch]
 
-  # 4. Milvus Standalone (Base Vectorielle)
   etcd:
     container_name: rag-etcd
     image: quay.io/coreos/etcd:v3.5.5
@@ -56,8 +64,7 @@ services:
     volumes:
       - ./data/etcd:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
-    networks:
-      - rag-network
+    networks: [rag-network]
 
   minio-milvus:
     container_name: rag-minio-milvus
@@ -68,8 +75,7 @@ services:
     volumes:
       - ./data/minio-milvus:/data
     command: server /data --console-address ":9002"
-    networks:
-      - rag-network
+    networks: [rag-network]
 
   milvus:
     container_name: rag-milvus
@@ -80,29 +86,146 @@ services:
       MINIO_ADDRESS: minio-milvus:9000
       MINIO_ACCESS_KEY_ID: minioadmin
       MINIO_SECRET_ACCESS_KEY: minioadmin
-    ports:
-      - "19530:19530"
+    ports: ["19530:19530"]
     volumes:
       - ./data/milvus:/var/lib/milvus
-    depends_on:
-      - etcd
-      - minio-milvus
-    networks:
-      - rag-network
+    depends_on: [etcd, minio-milvus]
+    networks: [rag-network]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
-  # 5. Environnement de développement (Jupyter + Spark)
   jupyter:
     image: jupyter/pyspark-notebook:latest
     container_name: rag-jupyter
-    ports:
-      - "8888:8888"
+    ports: ["8888:8888"]
     volumes:
       - ./:/home/jovyan/work
     environment:
       - JUPYTER_ENABLE_LAB=yes
-    networks:
-      - rag-network
+    networks: [rag-network]
+
+  # ==========================================================================
+  # SPARK (CPU) — parsing + chunking distribués
+  # ==========================================================================
+  spark-master:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.spark
+    image: financial-agent-rag-spark:latest
+    container_name: rag-spark-master
+    environment:
+      SPARK_MODE: master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./spark_jobs:/app/spark_jobs
+      - ./src/ingestion:/app/src/ingestion:ro
+      - ./data:/app/data
+    networks: [rag-network]
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.spark
+    image: financial-agent-rag-spark:latest
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 4G
+      SPARK_WORKER_CORES: 2
+    volumes:
+      - ./spark_jobs:/app/spark_jobs
+      - ./src/ingestion:/app/src/ingestion:ro
+      - ./data:/app/data
+    depends_on: [spark-master]
+    networks: [rag-network]
+    deploy:
+      replicas: 2
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+
+  # ==========================================================================
+  # APPLICATION
+  # ==========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api       # ← préfixe docker/ OBLIGATOIRE
+    image: financial-agent-rag-api:latest     # ← nom UNIQUE (pas "base" !)
+    container_name: rag-api
+    environment:
+      <<: *common-env
+      FORCE_DEVICE: cuda                       # ou "cpu" si pas de GPU
+    ports: ["8000:8000"]
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - ./src:/app/src                         # hot-reload dev
+      - ./data:/app/data:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    # Linux/WSL2 compat
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks: [rag-network]
+    depends_on:
+      milvus:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    command: >
+      uv run uvicorn src.api.main:app
+      --host 0.0.0.0 --port 8000 --reload
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    image: financial-agent-rag-ui:latest
+    container_name: rag-ui
+    environment:
+      API_URL: http://api:8000/api/ask
+    ports: ["8501:8501"]
+    volumes:
+      - ./src:/app/src
+    networks: [rag-network]
+    depends_on: [api]
+    restart: unless-stopped
+    
+  collector:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.collector
+    image: financial-agent-rag-collector:latest
+    container_name: rag-collector
+    environment:
+      HF_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      # ⚠️ Change l'email pour SEC EDGAR (obligatoire, sinon blocage IP)
+      SEC_USER_AGENT: "FinancialRAG Student salah@example.com"
+    volumes:
+      - ./data:/app/data                    # écrit dans ./data/raw/
+      - ./src:/app/src                      # hot-reload pour debug
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [rag-network]
+    profiles: ["tools"]                     # ← clé : n'apparaît pas dans `up -d`
 
 networks:
   rag-network:
     driver: bridge
+
+volumes:
+  hf-cache:

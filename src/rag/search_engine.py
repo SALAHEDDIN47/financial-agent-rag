@@ -1,4 +1,13 @@
 # src/rag/search_engine.py
+"""
+Moteur de recherche hybride : Milvus (dense) + Elasticsearch (BM25) + RRF + reranker.
+
+Toutes les connexions sont configurables via src.config.settings :
+  - MILVUS_HOST / MILVUS_PORT
+  - ELASTICSEARCH_HOST
+  - EMBEDDING_MODEL / RERANKER_MODEL
+  - FORCE_DEVICE ("cuda" | "cpu" | vide = auto)
+"""
 import logging
 import re
 from typing import List, Dict, Optional
@@ -7,6 +16,8 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from pymilvus import connections, Collection
 from elasticsearch import Elasticsearch
 
+from src.config.settings import settings
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -14,37 +25,56 @@ logger = logging.getLogger(__name__)
 class SearchEngine:
     def __init__(
         self,
-        milvus_host: str = "localhost",
-        milvus_port: str = "19530",
-        es_host: str = "http://localhost:9200",
-        collection_name: str = "financial_chunks",
-        es_index_name: str = "financial_chunks_bm25",
-        model_name: str = "BAAI/bge-large-en-v1.5",
-        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",   
+        milvus_host: Optional[str] = None,
+        milvus_port: Optional[str] = None,
+        es_host: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        es_index_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        reranker_model: Optional[str] = None,
         device: Optional[str] = None,
     ):
+        # ------------------------------------------------------------------
+        # Résolution des paramètres : explicite > settings > défaut
+        # ------------------------------------------------------------------
+        milvus_host = milvus_host or settings.milvus_host
+        milvus_port = milvus_port or str(settings.milvus_port)
+        es_host = es_host or settings.elasticsearch_host
+        collection_name = collection_name or settings.milvus_collection
+        es_index_name = es_index_name or settings.elasticsearch_index
+        model_name = model_name or settings.embedding_model
+        reranker_model = reranker_model or settings.reranker_model
+
+        # device : explicite > FORCE_DEVICE (env) > None (auto-détection torch)
+        if device is None:
+            device = settings.force_device or None
+
         self.collection_name = collection_name
         self.es_index_name = es_index_name
         self.device = device
 
+        logger.info(
+            f"⚙️  SearchEngine config : "
+            f"milvus={milvus_host}:{milvus_port} | es={es_host} | "
+            f"device={device or 'auto'}"
+        )
+
         # 1. Embedding model
         logger.info(f"🧠 Chargement embedding : {model_name}")
-        self.embedding_model = SentenceTransformer(
-            model_name, device=self.device
-        )
+        self.embedding_model = SentenceTransformer(model_name, device=device)
 
         # 2. Reranker (cross-encoder)
         logger.info(f"🎯 Chargement reranker : {reranker_model}")
-        self.reranker = CrossEncoder(reranker_model, device=self.device)
+        self.reranker = CrossEncoder(reranker_model, device=device)
 
         # 3. Milvus
-        logger.info("🔌 Connexion à Milvus...")
+        logger.info(f"🔌 Connexion à Milvus : {milvus_host}:{milvus_port}")
         connections.connect("default", host=milvus_host, port=milvus_port)
-        self.collection = Collection(self.collection_name)
-        logger.info(f"✅ Collection '{self.collection_name}' chargée")
+        self.collection = Collection(collection_name)
+        logger.info(f"✅ Collection '{collection_name}' chargée")
 
         # 4. Elasticsearch
-        logger.info("🔌 Connexion à Elasticsearch...")
+        logger.info(f"🔌 Connexion à Elasticsearch : {es_host}")
         self.es = Elasticsearch(es_host)
         if self.es.ping():
             logger.info("✅ Elasticsearch connecté")
@@ -120,7 +150,7 @@ class SearchEngine:
                     "rank_dense": rank,
                 })
 
-        # ✅ Filtre amélioré : garde le filtre uniquement si la query cible des chiffres
+        # Filtre : si la query cible des chiffres, garde uniquement les chunks numériques
         if re.search(
             r"(revenue|income|cash|earnings|profit|assets|liabilities|revenues)",
             query,
@@ -140,17 +170,20 @@ class SearchEngine:
         top_k: int = 10,
         filters: Optional[Dict] = None,
     ) -> List[Dict]:
-        cleaned_query = re.sub(r"[\u2018\u2019']s\b", "", query)   # Alphabet's → Alphabet
+        cleaned_query = re.sub(r"[\u2018\u2019']s\b", "", query)
         cleaned_query = re.sub(r"[\u2018\u2019']", " ", cleaned_query)
         cleaned_query = re.sub(r"\s+", " ", cleaned_query).strip()
+
         filter_clauses = []
         if filters:
             if "company" in filters:
-                filter_clauses.append({"term": {"company": filters["company"]}})          # sans .keyword
+                filter_clauses.append({"term": {"company": filters["company"]}})
             if "period" in filters:
-                filter_clauses.append({"term": {"period": filters["period"]}})            # sans .keyword
+                filter_clauses.append({"term": {"period": filters["period"]}})
             if "document_type" in filters:
-                filter_clauses.append({"term": {"document_type": filters["document_type"]}})  # sans .keyword
+                filter_clauses.append(
+                    {"term": {"document_type": filters["document_type"]}}
+                )
 
         query_body = {
             "query": {
@@ -159,7 +192,6 @@ class SearchEngine:
                         {"match": {"text": {"query": cleaned_query, "operator": "or"}}}
                     ],
                     "should": [
-                        # Boost sur les indicateurs de tableaux financiers
                         {"match_phrase": {"text": {"query": "Total revenue", "boost": 3.0}}},
                         {"match_phrase": {"text": {"query": "Total revenues", "boost": 3.0}}},
                         {"match_phrase": {"text": {"query": "Total net sales", "boost": 3.0}}},
@@ -235,18 +267,20 @@ class SearchEngine:
             doc["rerank_score"] = float(score)
         docs.sort(key=lambda x: x["rerank_score"], reverse=True)
 
-        if docs:
-            best = docs[0]["rerank_score"]
-            threshold = best * 0.3   # ✅ seuil relatif (50% du meilleur)
-            filtered = [d for d in docs if d["rerank_score"] >= threshold]
-        else:
-            filtered = []
+        best = docs[0]["rerank_score"]
+        worst = docs[-1]["rerank_score"]
 
-        if len(filtered) < len(docs):
-            logger.info(
-                f"   → Rerank : {len(docs) - len(filtered)} chunks filtrés "
-                f"(threshold = {threshold:.3f})"
-            )
+        if best == worst:
+            filtered = docs
+        else:
+            span = best - worst
+            threshold = best - span * 0.5
+            filtered = [d for d in docs if d["rerank_score"] >= threshold]
+
+        logger.info(
+            f"   → Rerank : {len(docs) - len(filtered)} chunks filtrés "
+            f"(best={best:.3f}, threshold={threshold:.3f})"
+        )
 
         if not filtered:
             logger.warning("⚠️ Fallback : tous les chunks filtrés, top 2 conservés")

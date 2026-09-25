@@ -1,0 +1,27 @@
+# docker/Dockerfile.spark
+FROM apache/spark:3.5.3-python3
+
+USER root
+ENV PYTHONPATH=/app SPARK_HOME=/opt/spark
+
+# Mettre à jour pip pour élargir le catalogue de versions visibles
+RUN pip install --no-cache-dir --upgrade pip
+
+# Dépendances de parsing — AUCUN pin (laisse pip résoudre)
+RUN pip install --no-cache-dir \
+    pdfplumber \
+    pymupdf \
+    python-docx \
+    beautifulsoup4 \
+    lxml \
+    html5lib \
+    tiktoken \
+    langchain-text-splitters
+
+WORKDIR /app
+COPY src/__init__.py            ./src/__init__.py
+COPY src/ingestion/             ./src/ingestion/
+COPY spark_jobs/                ./spark_jobs/
+
+EXPOSE 8080 7077 8081
+USER spark

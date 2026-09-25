@@ -1,31 +1,40 @@
 # src/rag/agent.py
+"""
+Agent RAG financier.
+
+Toute la configuration (Ollama URL, modèle, Milvus, ES, device) est lue
+depuis src.config.settings, qui lit lui-même les variables d'environnement.
+"""
 import logging
 from typing import List, Dict, Optional
 
-from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama
 
+from src.config.settings import settings
 from src.rag.search_engine import SearchEngine
 from src.rag.query_analyzer import detect_query_type, decompose_query
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-load_dotenv()
 
 # ==================== INITIALISATION ====================
-search_engine = SearchEngine(
-    milvus_host="localhost",
-    milvus_port="19530",
-    es_host="http://localhost:9200",
-)
+# SearchEngine lit MILVUS_HOST, ELASTICSEARCH_HOST, FORCE_DEVICE via settings.
+# Pas d'arguments → utilise les valeurs d'environnement.
+search_engine = SearchEngine()
 
+# LLM Ollama — URL et modèle configurables
+#   OLLAMA_BASE_URL=http://host.docker.internal:11434 (Docker)
+#   LLM_MODEL=qwen2.5:7b
+logger.info(
+    f"🤖 LLM Ollama : {settings.llm_model} @ {settings.ollama_base_url}"
+)
 llm = ChatOllama(
-    model="qwen2.5:7b",
+    model=settings.llm_model,
     temperature=0.0,
-    base_url="http://localhost:11434",
+    base_url=settings.ollama_base_url,
 )
 
 
@@ -53,7 +62,7 @@ def format_docs(docs: List[Dict], max_chars_per_doc: int = 1200) -> str:
 SIMPLE_PROMPT = """
 Tu es un analyste financier expert. Réponds à la question en te basant UNIQUEMENT sur les documents fournis.
 
-**Règles :**
+**Règles générales :**
 1. Si l'information existe (même en anglais ou dans un tableau), donne-la.
 2. Synonymes : "chiffre d'affaires" = "revenue", "bénéfice" = "net income".
 3. Lis attentivement les tableaux (lignes ET colonnes).
@@ -61,18 +70,33 @@ Tu es un analyste financier expert. Réponds à la question en te basant UNIQUEM
 5. **LANGUE** : Réponds dans la même langue que la question.
 6. Cite tes sources au format [Source X].
 
-**UNITÉS (CRUCIAL)** :
-- Tableaux 10-K/10-Q : montants en **millions USD** ("in millions")
-  → "$17,693" = 17,693 millions = **17.7 milliards de dollars**
-- Les revenus des grandes entreprises (Apple, Tesla, Google, Microsoft) se lisent en **milliards**
-- Écris toujours les 2 formes : "17,693 M USD (17.7 Md USD)"
-- Rappel : 1 000 = 1K ; 1 000 000 = 1M ; 1 000 000 000 = 1B = 1 milliard
+**🚨 RÈGLE ANTI-ERREUR TRIMESTRE vs ANNÉE (CRITIQUE) :**
 
-**DISTINCTION DES PÉRIODES (CRUCIAL)** :
+Dans un communiqué "Q4 2025 Results", les chiffres du 1er paragraphe 
+sont TOUJOURS ceux du TRIMESTRE, même si le titre mentionne "Fiscal Year".
+
+Exemple : "Alphabet Announces Fourth Quarter and Fiscal Year 2025 Results
+• Consolidated revenues increased 18% to 113.8 billion"
+→ 113.8 B = revenu **Q4 2025** uniquement
+→ NE PAS présenter ce chiffre comme FY2025
+
+**Comment trouver le vrai FY :**
+- **PRIORITÉ 1** : Chercher un chunk avec "Year Ended December 31" + 3 colonnes 
+  (ex: 2023, 2024, 2025) → le dernier chiffre est le FY
+- **PRIORITÉ 2** : Chercher "Full year", "Twelve months ended", "Annual revenues"
+- **PRIORITÉ 3** : Additionner les 4 trimestres si tous disponibles
+- **Sinon** : dire "non disponible"
+
+**UNITÉS (CRUCIAL) :**
+- Tableaux 10-K/10-Q : montants en **millions USD** ("in millions")
+  → "$402,836" = 402,836 millions = **402.8 milliards**
+- Écris toujours les 2 formes : "402,836 M USD (402.8 Md USD)"
+- Rappel : 1K = 1 000 ; 1M = 1 000 000 ; 1B = 1 milliard
+
+**DISTINCTION DES PÉRIODES :**
 - "FY2025" / "in 2025" = exercice fiscal complet
 - "Q1 2025" / "Q4 2025" = trimestre spécifique
-- Si la question demande un trimestre ET que tu as le trimestre → **réponds directement**, sans mentionner de différence FY vs Q
-- Si la question demande l'année ET que tu n'as que le trimestre → signale la différence
+- Si la question demande l'année, réponds avec le FY (pas le Q4)
 
 Documents de contexte :
 {context}

@@ -2,15 +2,18 @@
 """
 Configuration centralisée du projet.
 
-Toutes les variables d'environnement sont déclarées ici.
-Pydantic-Settings les charge depuis `.env` et valide les types.
+Pydantic-Settings charge les valeurs depuis (ordre de priorité) :
+  1. Variables d'environnement Docker (ex: MILVUS_HOST=milvus)
+  2. Fichier .env (développement local)
+  3. Valeurs par défaut ci-dessous
 
-Pour ajouter une variable :
-  1. Ajouter le champ dans Settings (avec type + valeur par défaut si optionnel)
-  2. Ajouter la clé dans `.env` (si non-default)
+Le nom de la variable d'env est insensible à la casse :
+  MILVUS_HOST → milvus_host
+  OLLAMA_BASE_URL → ollama_base_url
+  FORCE_DEVICE → force_device
 """
-from pathlib import Path
 from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +31,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     milvus_host: str = "localhost"
     milvus_port: int = 19530
+    milvus_collection: str = "financial_chunks"
 
     # -------------------------------------------------------------------------
     # ELASTICSEARCH (BM25)
@@ -36,15 +40,26 @@ class Settings(BaseSettings):
     elasticsearch_index: str = "financial_chunks_bm25"
 
     # -------------------------------------------------------------------------
-    # LLM / MODELS
+    # LLM / OLLAMA
     # -------------------------------------------------------------------------
+    # ⚠️ Dans Docker : OLLAMA_BASE_URL=http://host.docker.internal:11434
+    ollama_base_url: str = "http://localhost:11434"
+    llm_model: str = "qwen2.5:7b"
+
     gemini_api_key: Optional[str] = None
     huggingface_token: Optional[str] = None
 
-    # Modèles par défaut (peuvent être surchargés via .env)
+    # -------------------------------------------------------------------------
+    # EMBEDDING / RERANKER
+    # -------------------------------------------------------------------------
     embedding_model: str = "BAAI/bge-large-en-v1.5"
     embedding_dim: int = 1024
-    llm_model: str = "qwen2.5:7b"      # ou "gemini-pro" si API cloud
+    reranker_model: str = "BAAI/bge-reranker-base"
+
+    # ⚠️ Dans Docker GPU : FORCE_DEVICE=cuda
+    #    Dans Docker CPU : FORCE_DEVICE=cpu
+    #    En local : laisser vide → auto-détection
+    force_device: Optional[str] = None
 
     # -------------------------------------------------------------------------
     # API
@@ -55,9 +70,9 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # RAG
     # -------------------------------------------------------------------------
-    top_k_vector: int = 20       # Nombre de candidats Milvus
-    top_k_bm25: int = 20         # Nombre de candidats ES
-    top_k_final: int = 5         # Nombre de chunks passés au LLM
+    top_k_vector: int = 20
+    top_k_bm25: int = 20
+    top_k_final: int = 5
 
     # -------------------------------------------------------------------------
     # CONFIG PYDANTIC
@@ -66,9 +81,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",   # ✅ tolère les variables du .env non déclarées
+        extra="ignore",   # tolère les variables non déclarées
     )
 
 
-# Singleton global
+# Singleton global — importé partout
 settings = Settings()

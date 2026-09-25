@@ -1,0 +1,45 @@
+# =============================================================================
+# .dockerignore — évite d'envoyer des GB au daemon Docker
+# =============================================================================
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Git / IDE ---
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+
+# --- Données lourdes (NON nécessaires au runtime API/UI) ---
+data/
+notebooks/
+tests/
+
+# --- Manifests locaux ---
+.env
+.env.*
+!.env.example
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Docs et CI (sauf README) ---
+*.md
+!README.md
+.github/
+
+# --- Dossiers infra (pas besoin dans l'image Python) ---
+infra/
+docker/

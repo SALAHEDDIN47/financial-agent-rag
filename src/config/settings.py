@@ -84,6 +84,11 @@ class Settings(BaseSettings):
         extra="ignore",   # tolère les variables non déclarées
     )
 
+    # -------------------------------------------------------------------------
+    # STORAGE (S3 / MinIO / local)
+    # -------------------------------------------------------------------------
+    storage_backend: str = "minio"   # "minio" | "local
+
 
 # Singleton global — importé partout
 settings = Settings()

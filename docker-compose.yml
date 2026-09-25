@@ -206,22 +206,23 @@ services:
     restart: unless-stopped
     
   collector:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.collector
-    image: financial-agent-rag-collector:latest
-    container_name: rag-collector
-    environment:
-      HF_TOKEN: ${HUGGINGFACE_TOKEN:-}
-      # ⚠️ Change l'email pour SEC EDGAR (obligatoire, sinon blocage IP)
-      SEC_USER_AGENT: "FinancialRAG Student salah@example.com"
-    volumes:
-      - ./data:/app/data                    # écrit dans ./data/raw/
-      - ./src:/app/src                      # hot-reload pour debug
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks: [rag-network]
-    profiles: ["tools"]                     # ← clé : n'apparaît pas dans `up -d`
+      build:
+        context: .
+        dockerfile: docker/Dockerfile.collector
+      image: financial-agent-rag-collector:latest
+      container_name: rag-collector
+      environment:
+        <<: *common-env                      # ← récupère MINIO_*, SEC_*
+        HF_TOKEN: ${HUGGINGFACE_TOKEN:-}
+        SEC_USER_AGENT: "salah@example.com"  # ← email réel
+        STORAGE_BACKEND: minio
+      volumes:
+        - ./src:/app/src                     # hot-reload
+        - hf-cache:/root/.cache/huggingface  # cache datasets HuggingFace
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+      networks: [rag-network]
+      profiles: ["tools"]                    # ← clé : n'apparaît pas dans `up -d`
 
 networks:
   rag-network:

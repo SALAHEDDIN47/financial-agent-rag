@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Installer UNIQUEMENT les collectors (pas de torch, pas de langchain)
 RUN pip install --no-cache-dir \
+    pydantic-settings \
+    boto3 \
     requests \
     yfinance \
     datasets \

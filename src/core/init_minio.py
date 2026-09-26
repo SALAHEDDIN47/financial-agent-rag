@@ -18,6 +18,7 @@ BUCKETS = [
     "raw-documents",
     "parsed-documents",
     "processed-chunks",
+    "embeddings",
     "manifests",
 ]
 

@@ -1,0 +1,26 @@
+# Service headless sans selector
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-external
+  namespace: financial-rag
+spec:
+  ports:
+    - port: 11434
+      targetPort: 11434
+---
+# Endpoints manuels pointant vers l'hôte
+# ⚠️ À adapter selon ton environnement :
+#   - Docker Desktop K8s : 192.168.65.254 (host.docker.internal)
+#   - Minikube : $(minikube ip)
+#   - Kind : IP de l'hôte sur le bridge docker
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ollama-external
+  namespace: financial-rag
+subsets:
+  - addresses:
+      - ip: 192.168.65.254    # ← Docker Desktop par défaut
+    ports:
+      - port: 11434

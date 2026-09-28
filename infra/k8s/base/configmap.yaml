@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-config
+  namespace: financial-rag
+data:
+  MILVUS_HOST: "milvus.financial-rag.svc.cluster.local"
+  MILVUS_PORT: "19530"
+  MILVUS_COLLECTION: "financial_chunks"
+  ELASTICSEARCH_HOST: "http://elasticsearch.financial-rag.svc.cluster.local:9200"
+  ELASTICSEARCH_INDEX: "financial_chunks_bm25"
+  MINIO_ENDPOINT: "minio.financial-rag.svc.cluster.local:9000"
+  OLLAMA_BASE_URL: "http://ollama-external.financial-rag.svc.cluster.local:11434"
+  LLM_MODEL: "qwen2.5:7b"
+  EMBEDDING_MODEL: "BAAI/bge-large-en-v1.5"
+  RERANKER_MODEL: "BAAI/bge-reranker-base"
+  FORCE_DEVICE: "cuda"
+  STORAGE_BACKEND: "minio"

@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: financial-rag
+resources:
+  - ../../base
+patches:
+  # En dev local, on utilise CPU au lieu de GPU
+  - target:
+      kind: Deployment
+      name: rag-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1

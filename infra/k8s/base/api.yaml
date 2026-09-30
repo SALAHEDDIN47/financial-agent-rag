@@ -33,7 +33,6 @@ spec:
             limits:
               memory: "6Gi"
               cpu: "2"
-              nvidia.com/gpu: "1"          # ⚠️ Requiert un node GPU
           readinessProbe:
             httpGet:
               path: /health

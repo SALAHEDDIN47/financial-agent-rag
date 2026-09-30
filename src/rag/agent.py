@@ -39,7 +39,7 @@ llm = ChatOllama(
 
 
 # ==================== FORMATAGE ====================
-def format_docs(docs: List[Dict], max_chars_per_doc: int = 1200) -> str:
+def format_docs(docs: List[Dict], start_idx: int = 0, max_chars_per_doc: int = 1200) -> str:
     formatted = []
     for i, doc in enumerate(docs):
         company = doc.get("company", "Unknown")
@@ -51,7 +51,7 @@ def format_docs(docs: List[Dict], max_chars_per_doc: int = 1200) -> str:
             text = text[:max_chars_per_doc] + "... [tronqué]"
 
         formatted.append(
-            f"[Source {i + 1}] Entreprise: {company} | "
+            f"[Source {start_idx + i + 1}] Entreprise: {company} | "
             f"Période: {period} | Type: {doc_type}\n"
             f"Extrait:\n{text}\n"
         )
@@ -107,36 +107,34 @@ Réponse :
 """
 
 COMPARATIVE_PROMPT = """
-Tu es un analyste financier expert. Suis EXACTEMENT ces étapes.
+Tu es un analyste financier expert. Réponds en suivant STRICTEMENT ces règles.
 
-**ÉTAPE 1 — LECTURE** : Parcours chaque [Source X] et note mentalement :
-   - Son entreprise (champ "Entreprise:")
-   - Sa période (champ "Période:")
-   - S'il contient un chiffre de TOTAL revenue/revenue (pas une variation)
+**RÈGLE 1 — UNE SOURCE = UNE SEULE ENTREPRISE**
+Chaque [Source X] concerne UNE entreprise précise indiquée dans le champ "Entreprise:".
+Tu NE DOIS JAMAIS utiliser un chiffre d'une source Microsoft pour Alphabet (et vice-versa).
 
-**ÉTAPE 2 — EXTRACTION** : Pour chaque entreprise demandée dans la question :
-   - Cherche la source dont la Période correspond à la question
-   - Extrais le chiffre TOTAL (pas la variation)
-   - Exemple de TOTAL : "revenues ... to $90.2 billion"
-   - Exemple de VARIATION (à IGNORER) : "revenue increased 12%"
+**RÈGLE 2 — TABLEAU DE SYNTHÈSE**
+Remplis ce tableau avec les chiffres TROUVÉS dans les sources :
 
-**ÉTAPE 3 — RÉPONSE** :
+| Entreprise | Période | Revenue TOTAL | Source |
+|---|---|---|---|
+| Alphabet | 2024 | ?? | [Source X] |
+| Microsoft | 2024 | ?? | [Source Y] |
 
-### Microsoft
-- **Revenue [Période]** : [chiffre OU "❌ Non disponible"]
+- Pour chaque ligne, cite le [Source X] EXACT d'où vient le chiffre.
+- Si tu ne trouves pas, écris "❌ non trouvé" et NE DEVINE PAS.
 
-### Alphabet
-- **Revenue [Période]** : [chiffre OU "❌ Non disponible"]
+**RÈGLE 3 — VÉRIFICATION CROISÉE**
+Avant de finaliser, vérifie que :
+- Le chiffre Alphabet vient bien d'une source dont "Entreprise: GOOGL/Alphabet"
+- Le chiffre Microsoft vient bien d'une source dont "Entreprise: MSFT/Microsoft"
+- Si les 2 chiffres sont identiques, c'est SUSPECT → revérifie les sources.
 
-### Comparison
-[si 2 chiffres disponibles]
-
-**RÈGLES ABSOLUES :**
-- Ne JAMAIS inventer.
-- Ne JAMAIS multiplier un trimestriel par 4.
-- Ne JAMAIS substituer Q4 2025 à Q1 2025.
-- Cite [Source X] après chaque chiffre.
-- Réponds dans la langue de la question.
+**RÈGLE 4 — EXTRAITS AUTORISÉS**
+Cherche en priorité :
+- "Total revenues", "Revenues" dans un tableau "Year Ended December 31"
+- "Total revenue" dans un "INCOME STATEMENT"
+- Prends la colonne correspondant à 2024 (pas 2023 ni 2022)
 
 Documents de contexte :
 {context}
@@ -227,12 +225,16 @@ def ask_financial_agent(
 
     # Construction du contexte groupé
     context_parts = []
+    source_cursor = 0
     for i, item in enumerate(all_docs_by_query):
         header = f"### Sous-question {i + 1} : {item['sub_query']}"
         if item.get("company"):
             header += f" (Entreprise : {item['company']})"
         context_parts.append(header)
-        context_parts.append(format_docs(item["docs"]))
+        context_parts.append(
+            format_docs(item["docs"], start_idx=source_cursor)
+        )
+        source_cursor += len(item["docs"])
     context = "\n\n".join(context_parts)
 
     # Choix du prompt

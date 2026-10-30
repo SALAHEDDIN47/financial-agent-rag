@@ -28,16 +28,16 @@ spec:
                 name: rag-secrets
           resources:
             requests:
-              memory: "3Gi"
+              memory: "4Gi"
               cpu: "1"
             limits:
-              memory: "6Gi"
+              memory: "8Gi"
               cpu: "2"
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 60
+            initialDelaySeconds: 300
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
@@ -45,7 +45,7 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120
+            initialDelaySeconds: 600
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3

@@ -4,15 +4,24 @@ metadata:
   name: rag-config
   namespace: financial-rag
 data:
-  MILVUS_HOST: "milvus.financial-rag.svc.cluster.local"
+  # --- Milvus & ES sur l'hôte Docker (Option B transition) ---
+  MILVUS_HOST: "192.168.65.254"
   MILVUS_PORT: "19530"
   MILVUS_COLLECTION: "financial_chunks"
-  ELASTICSEARCH_HOST: "http://elasticsearch.financial-rag.svc.cluster.local:9200"
+
+  ELASTICSEARCH_HOST: "http://192.168.65.254:9200"
   ELASTICSEARCH_INDEX: "financial_chunks_bm25"
-  MINIO_ENDPOINT: "minio.financial-rag.svc.cluster.local:9000"
-  OLLAMA_BASE_URL: "http://ollama-external.financial-rag.svc.cluster.local:11434"
-  LLM_MODEL: "qwen2.5:7b"
+
+  # --- MinIO sur l'hôte (via le port 9000 exposé par Docker Compose) ---
+  MINIO_ENDPOINT: "192.168.65.254:9000"
+  # ou : 192.168.65.254:9000 si host.docker.internal échoue
+
+  # --- Ollama (ton Endpoint manuel) ---
+  OLLAMA_BASE_URL: "http://ollama-external:11434"
+  LLM_MODEL: "qwen2.5:14b"
+
+  # --- Modèles ---
   EMBEDDING_MODEL: "BAAI/bge-large-en-v1.5"
   RERANKER_MODEL: "BAAI/bge-reranker-base"
-  FORCE_DEVICE: "cpu"
+  FORCE_DEVICE: "cpu"           # ⚠️ Docker Desktop K8s ne passe PAS le GPU
   STORAGE_BACKEND: "minio"

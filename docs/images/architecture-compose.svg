@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="760" fill="#ffffff"/>
+  <text x="600" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">Financial Agent RAG — Docker Compose Architecture</text>
+  <text x="600" y="60" text-anchor="middle" font-size="13" fill="#64748b">Containerised Big Data pipeline with GPU embeddings and host-side LLM</text>
+
+  <!-- HOST -->
+  <rect x="40" y="84" width="1120" height="110" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="60" y="108" font-size="13" font-weight="700" fill="#334155">HOST (Windows / Linux / macOS)</text>
+  <rect x="80" y="122" width="300" height="56" rx="8" fill="#ecfdf5" stroke="#34d399" stroke-width="2"/>
+  <text x="230" y="146" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">NVIDIA Driver</text>
+  <text x="230" y="164" text-anchor="middle" font-size="11.5" fill="#047857">≥ 535 (CUDA 12.4)</text>
+  <rect x="440" y="122" width="320" height="56" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="600" y="146" text-anchor="middle" font-size="13" font-weight="700" fill="#78350f">Ollama</text>
+  <text x="600" y="164" text-anchor="middle" font-size="11.5" fill="#92400e">Qwen 2.5 (7B / 14B) · port 11434</text>
+
+  <!-- Docker network -->
+  <rect x="40" y="226" width="1120" height="500" rx="14" fill="#f0f9ff" stroke="#38bdf8" stroke-width="2"/>
+  <text x="60" y="250" font-size="13" font-weight="700" fill="#075985">DOCKER COMPOSE NETWORK</text>
+
+  <!-- Spark -->
+  <rect x="70" y="268" width="520" height="150" rx="10" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  <text x="90" y="292" font-size="12.5" font-weight="700" fill="#7c2d12">Distributed processing (CPU) — Spark 3.5.3</text>
+  <rect x="95" y="312" width="140" height="80" rx="8" fill="#ffffff" stroke="#fb923c"/>
+  <text x="165" y="346" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">Spark Master</text>
+  <text x="165" y="366" text-anchor="middle" font-size="11" fill="#9a3412">:7077</text>
+  <rect x="270" y="312" width="140" height="80" rx="8" fill="#ffffff" stroke="#fb923c"/>
+  <text x="340" y="346" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">Worker 1</text>
+  <text x="340" y="366" text-anchor="middle" font-size="11" fill="#9a3412">2 GB · parse/chunk</text>
+  <rect x="435" y="312" width="140" height="80" rx="8" fill="#ffffff" stroke="#fb923c"/>
+  <text x="505" y="346" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">Worker 2</text>
+  <text x="505" y="366" text-anchor="middle" font-size="11" fill="#9a3412">2 GB · parse/chunk</text>
+  <g stroke="#fb923c" stroke-width="2"><line x1="235" y1="352" x2="270" y2="352"/><line x1="410" y1="352" x2="435" y2="352"/></g>
+
+  <!-- Collector -->
+  <rect x="640" y="268" width="210" height="150" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="745" y="302" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Collector</text>
+  <text x="745" y="324" text-anchor="middle" font-size="11.5" fill="#475569">one-shot (profile: tools)</text>
+  <text x="745" y="344" text-anchor="middle" font-size="11.5" fill="#475569">SEC · FinQA · News</text>
+  <text x="745" y="362" text-anchor="middle" font-size="11.5" fill="#475569">Playwright scrapers</text>
+
+  <!-- Storage -->
+  <rect x="70" y="456" width="780" height="120" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <text x="90" y="480" font-size="12.5" font-weight="700" fill="#1e3a8a">Storage &amp; indexes</text>
+  <rect x="95" y="496" width="230" height="64" rx="8" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="210" y="523" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">MinIO</text>
+  <text x="210" y="543" text-anchor="middle" font-size="11" fill="#1d4ed8">Data Lake (S3) :9000</text>
+  <rect x="350" y="496" width="230" height="64" rx="8" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="465" y="523" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">Milvus 2.3.3</text>
+  <text x="465" y="543" text-anchor="middle" font-size="11" fill="#1d4ed8">Vectors (HNSW) :19530</text>
+  <rect x="605" y="496" width="220" height="64" rx="8" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="715" y="523" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">Elasticsearch 8.11</text>
+  <text x="715" y="543" text-anchor="middle" font-size="11" fill="#1d4ed8">BM25 :9200</text>
+
+  <!-- App -->
+  <rect x="70" y="610" width="780" height="92" rx="10" fill="#faf5ff" stroke="#c084fc" stroke-width="2"/>
+  <text x="90" y="634" font-size="12.5" font-weight="700" fill="#581c87">Application</text>
+  <rect x="190" y="646" width="240" height="46" rx="8" fill="#ffffff" stroke="#c084fc"/>
+  <text x="310" y="667" text-anchor="middle" font-size="13" font-weight="700" fill="#581c87">API FastAPI + LangGraph</text>
+  <text x="310" y="683" text-anchor="middle" font-size="11" fill="#6b21a8">GPU · :8000</text>
+  <rect x="520" y="646" width="240" height="46" rx="8" fill="#ffffff" stroke="#c084fc"/>
+  <text x="640" y="667" text-anchor="middle" font-size="13" font-weight="700" fill="#581c87">UI Streamlit</text>
+  <text x="640" y="683" text-anchor="middle" font-size="11" fill="#6b21a8">CPU · :8501</text>
+  <line x1="520" y1="669" x2="430" y2="669" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- Side: Kibana/etcd -->
+  <rect x="890" y="456" width="240" height="120" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="1010" y="490" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Support services</text>
+  <text x="1010" y="514" text-anchor="middle" font-size="11.5" fill="#475569">etcd 3.5.5 (Milvus metadata)</text>
+  <text x="1010" y="534" text-anchor="middle" font-size="11.5" fill="#475569">minio-milvus (Milvus storage)</text>
+  <text x="1010" y="554" text-anchor="middle" font-size="11.5" fill="#475569">Kibana 8.11 (ES UI)</text>
+
+  <!-- Arrows -->
+  <g stroke="#475569" stroke-width="2" fill="none" marker-end="url(#a)">
+    <line x1="745" y1="418" x2="500" y2="496"/>
+    <line x1="340" y1="418" x2="260" y2="496"/>
+    <line x1="465" y1="560" x2="400" y2="646"/>
+    <line x1="715" y1="560" x2="520" y2="646"/>
+    <line x1="210" y1="560" x2="240" y2="646"/>
+  </g>
+  <!-- Ollama link -->
+  <path d="M 190 669 L 55 669 L 55 210 L 600 210 L 600 180" stroke="#d97706" stroke-width="2" fill="none" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <text x="70" y="204" font-size="11" fill="#92400e">host.docker.internal:11434</text>
+  <text x="868" y="660" font-size="11" fill="#475569"></text>
+</svg>

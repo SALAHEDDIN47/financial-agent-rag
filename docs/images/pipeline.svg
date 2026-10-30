@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="320" fill="#ffffff"/>
+  <text x="600" y="42" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">Financial Agent RAG — End-to-End Data Pipeline</text>
+  <text x="600" y="66" text-anchor="middle" font-size="13" fill="#64748b">From raw filings to a cited, reasoned answer</text>
+
+  <!-- Box 0: Sources -->
+  <rect x="18" y="100" width="144" height="100" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="90" y="132" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Sources</text>
+  <text x="90" y="154" text-anchor="middle" font-size="11.5" fill="#475569">SEC · FinQA · News</text>
+  <text x="90" y="171" text-anchor="middle" font-size="11.5" fill="#475569">Transcripts · Scrapers</text>
+
+  <!-- Box 1: raw -->
+  <rect x="186" y="100" width="144" height="100" rx="10" fill="#f0fdf4" stroke="#4ade80" stroke-width="2"/>
+  <text x="258" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#14532d">raw-documents/</text>
+  <text x="258" y="154" text-anchor="middle" font-size="11.5" fill="#166534">~88 files · 98 MB</text>
+  <text x="258" y="171" text-anchor="middle" font-size="11.5" fill="#166534">MinIO Data Lake</text>
+
+  <!-- Box 2: parsed -->
+  <rect x="354" y="100" width="144" height="100" rx="10" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  <text x="426" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">parsed-documents/</text>
+  <text x="426" y="154" text-anchor="middle" font-size="11.5" fill="#9a3412">7,149 JSON docs</text>
+  <text x="426" y="171" text-anchor="middle" font-size="11.5" fill="#9a3412">PDF · DOCX · SEC · JSON</text>
+
+  <!-- Box 3: chunks -->
+  <rect x="522" y="100" width="144" height="100" rx="10" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  <text x="594" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">processed-chunks/</text>
+  <text x="594" y="154" text-anchor="middle" font-size="11.5" fill="#9a3412">25,188 JSONL chunks</text>
+  <text x="594" y="171" text-anchor="middle" font-size="11.5" fill="#9a3412">token-aware chunking</text>
+
+  <!-- Box 4: embeddings -->
+  <rect x="690" y="100" width="144" height="100" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <text x="762" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">embeddings/</text>
+  <text x="762" y="154" text-anchor="middle" font-size="11.5" fill="#1d4ed8">25,188 vectors</text>
+  <text x="762" y="171" text-anchor="middle" font-size="11.5" fill="#1d4ed8">BGE-large · 1024 dim</text>
+
+  <!-- Box 5: indexes -->
+  <rect x="858" y="100" width="144" height="100" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <text x="930" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">Milvus + ES</text>
+  <text x="930" y="154" text-anchor="middle" font-size="11.5" fill="#1d4ed8">HNSW (dense)</text>
+  <text x="930" y="171" text-anchor="middle" font-size="11.5" fill="#1d4ed8">BM25 (lexical)</text>
+
+  <!-- Box 6: agent -->
+  <rect x="1026" y="100" width="144" height="100" rx="10" fill="#faf5ff" stroke="#c084fc" stroke-width="2"/>
+  <text x="1098" y="132" text-anchor="middle" font-size="14" font-weight="700" fill="#581c87">RAG Agent</text>
+  <text x="1098" y="154" text-anchor="middle" font-size="11.5" fill="#6b21a8">FastAPI · LangGraph</text>
+  <text x="1098" y="171" text-anchor="middle" font-size="11.5" fill="#6b21a8">Streamlit UI</text>
+
+  <!-- Arrows -->
+  <g stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <line x1="162" y1="150" x2="184" y2="150"/>
+    <line x1="330" y1="150" x2="352" y2="150"/>
+    <line x1="498" y1="150" x2="520" y2="150"/>
+    <line x1="666" y1="150" x2="688" y2="150"/>
+    <line x1="834" y1="150" x2="856" y2="150"/>
+    <line x1="1002" y1="150" x2="1024" y2="150"/>
+  </g>
+
+  <!-- Step labels -->
+  <g font-size="12.5" font-weight="600" fill="#334155" text-anchor="middle">
+    <text x="174" y="232">1 · Collect</text>
+    <text x="342" y="232">2 · Parse</text>
+    <text x="510" y="232">3 · Chunk</text>
+    <text x="678" y="232">4 · Embed</text>
+    <text x="846" y="232">5 · Index</text>
+    <text x="1014" y="232">6 · Query</text>
+  </g>
+  <g font-size="11" fill="#64748b" text-anchor="middle">
+    <text x="174" y="250">Python collectors</text>
+    <text x="342" y="250">Apache Spark</text>
+    <text x="510" y="250">Apache Spark</text>
+    <text x="678" y="250">GPU (CUDA)</text>
+    <text x="846" y="250">pymilvus · ES</text>
+    <text x="1014" y="250">Qwen 2.5 via Ollama</text>
+  </g>
+
+  <!-- Legend -->
+  <g font-size="11.5" fill="#475569">
+    <rect x="360" y="282" width="14" height="14" rx="3" fill="#f0fdf4" stroke="#4ade80"/><text x="381" y="294">Storage</text>
+    <rect x="450" y="282" width="14" height="14" rx="3" fill="#fff7ed" stroke="#fb923c"/><text x="471" y="294">Spark processing</text>
+    <rect x="600" y="282" width="14" height="14" rx="3" fill="#eff6ff" stroke="#60a5fa"/><text x="621" y="294">Embedding &amp; indexing</text>
+    <rect x="770" y="282" width="14" height="14" rx="3" fill="#faf5ff" stroke="#c084fc"/><text x="791" y="294">Application</text>
+  </g>
+</svg>

@@ -13,7 +13,7 @@
   <text x="60" y="108" font-size="13" font-weight="700" fill="#334155">WINDOWS HOST</text>
 
   <rect x="70" y="126" width="300" height="70" rx="8" fill="#ecfdf5" stroke="#34d399" stroke-width="2"/>
-  <text x="220" y="154" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">NVIDIA GTX 1650 Ti</text>
+  <text x="220" y="154" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">NVIDIA </text>
   <text x="220" y="174" text-anchor="middle" font-size="11.5" fill="#047857">4 GB VRAM (partial offload, rest in RAM)</text>
 
   <rect x="70" y="214" width="300" height="100" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>

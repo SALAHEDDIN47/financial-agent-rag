@@ -39,7 +39,7 @@ spec:
               port: 8000
             initialDelaySeconds: 300
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 30
             failureThreshold: 6
           livenessProbe:
             httpGet:
@@ -47,7 +47,7 @@ spec:
               port: 8000
             initialDelaySeconds: 600
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 120
             failureThreshold: 3
           volumeMounts:
             - name: hf-cache

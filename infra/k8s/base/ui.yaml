@@ -18,7 +18,7 @@ spec:
       containers:
         - name: ui
           image: financial-agent-rag-ui:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8501
           env:

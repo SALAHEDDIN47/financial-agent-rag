@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # ⚠️ Dans Docker : OLLAMA_BASE_URL=http://host.docker.internal:11434
     ollama_base_url: str = "http://localhost:11434"
-    llm_model: str = "qwen2.5:14b"
+    llm_model: str = "qwen2.5:7b"
 
     gemini_api_key: Optional[str] = None
     huggingface_token: Optional[str] = None

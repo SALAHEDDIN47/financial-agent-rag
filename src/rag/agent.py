@@ -1,9 +1,6 @@
 # src/rag/agent.py
 """
 Agent RAG financier.
-
-Toute la configuration (Ollama URL, modèle, Milvus, ES, device) est lue
-depuis src.config.settings, qui lit lui-même les variables d'environnement.
 """
 import logging
 from typing import List, Dict, Optional
@@ -19,15 +16,9 @@ from src.rag.query_analyzer import detect_query_type, decompose_query
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-
 # ==================== INITIALISATION ====================
-# SearchEngine lit MILVUS_HOST, ELASTICSEARCH_HOST, FORCE_DEVICE via settings.
-# Pas d'arguments → utilise les valeurs d'environnement.
 search_engine = SearchEngine()
 
-# LLM Ollama — URL et modèle configurables
-#   OLLAMA_BASE_URL=http://host.docker.internal:11434 (Docker)
-#   LLM_MODEL=qwen2.5:7b
 logger.info(
     f"🤖 LLM Ollama : {settings.llm_model} @ {settings.ollama_base_url}"
 )
@@ -36,7 +27,6 @@ llm = ChatOllama(
     temperature=0.0,
     base_url=settings.ollama_base_url,
 )
-
 
 # ==================== FORMATAGE ====================
 def format_docs(docs: List[Dict], start_idx: int = 0, max_chars_per_doc: int = 1200) -> str:
@@ -48,119 +38,113 @@ def format_docs(docs: List[Dict], start_idx: int = 0, max_chars_per_doc: int = 1
         text = doc.get("text", "")
 
         if len(text) > max_chars_per_doc:
-            text = text[:max_chars_per_doc] + "... [tronqué]"
+            text = text[:max_chars_per_doc] + "... [truncated]"
 
         formatted.append(
-            f"[Source {start_idx + i + 1}] Entreprise: {company} | "
-            f"Période: {period} | Type: {doc_type}\n"
-            f"Extrait:\n{text}\n"
+            f"[Source {start_idx + i + 1}] Company: {company} | "
+            f"Period: {period} | Type: {doc_type}\n"
+            f"Excerpt:\n{text}\n"
         )
     return "\n---\n".join(formatted)
 
-
-# ==================== PROMPTS ====================
+# ==================== PROMPTS (100% ENGLISH) ====================
 SIMPLE_PROMPT = """
-Tu es un analyste financier expert. Réponds à la question en te basant UNIQUEMENT sur les documents fournis.
+You are an expert financial analyst. Answer the question based ONLY on the provided documents.
 
-**Règles générales :**
-1. Si l'information existe (même en anglais ou dans un tableau), donne-la.
-2. Synonymes : "chiffre d'affaires" = "revenue", "bénéfice" = "net income".
-3. Lis attentivement les tableaux (lignes ET colonnes).
-4. Si rien n'est trouvé : "Je n'ai pas trouvé cette information dans les documents fournis."
-5. **LANGUE** : Réponds dans la même langue que la question.
-6. Cite tes sources au format [Source X].
+**GENERAL RULES:**
+1. If the information exists (even in English or in a table), provide it.
+2. Synonyms: "revenue" = "total revenues" = "net sales", "net income" = "profit".
+3. Carefully read the tables (rows AND columns).
+4. If nothing is found: "I could not find this information in the provided documents."
+5. **LANGUAGE RULE (STRICT)**: You MUST answer in **ENGLISH**, regardless of the language of the question or the documents.
 
-**🚨 RÈGLE ANTI-ERREUR TRIMESTRE vs ANNÉE (CRITIQUE) :**
+**🚨 ANTI-ERROR RULE: QUARTER vs YEAR (CRITICAL)**
+In a "Q4 2025 Results" press release, numbers in the first paragraph are ALWAYS for the QUARTER, even if the title mentions "Fiscal Year".
+Example: "Consolidated revenues increased 18% to 113.8 billion" -> 113.8 B is **Q4 2025 only**. Do NOT present it as FY2025.
 
-Dans un communiqué "Q4 2025 Results", les chiffres du 1er paragraphe 
-sont TOUJOURS ceux du TRIMESTRE, même si le titre mentionne "Fiscal Year".
+**How to find the true FY:**
+- PRIORITY 1: Look for a chunk with "Year Ended December 31" + 3 columns (e.g., 2023, 2024, 2025). The last number is the FY.
+- PRIORITY 2: Look for "Full year", "Twelve months ended", "Annual revenues".
+- PRIORITY 3: Sum the 4 quarters if all are available.
+- Otherwise: say "not available".
 
-Exemple : "Alphabet Announces Fourth Quarter and Fiscal Year 2025 Results
-• Consolidated revenues increased 18% to 113.8 billion"
-→ 113.8 B = revenu **Q4 2025** uniquement
-→ NE PAS présenter ce chiffre comme FY2025
+**UNITS (CRUCIAL):**
+- 10-K/10-Q tables: amounts are in **millions USD** ("in millions").
+  -> "$402,836" = 402,836 million = **402.8 billion**.
+- Always write both forms: "402,836 M USD (402.8 B USD)".
+- Reminder: 1K = 1,000; 1M = 1,000,000; 1B = 1 billion.
 
-**Comment trouver le vrai FY :**
-- **PRIORITÉ 1** : Chercher un chunk avec "Year Ended December 31" + 3 colonnes 
-  (ex: 2023, 2024, 2025) → le dernier chiffre est le FY
-- **PRIORITÉ 2** : Chercher "Full year", "Twelve months ended", "Annual revenues"
-- **PRIORITÉ 3** : Additionner les 4 trimestres si tous disponibles
-- **Sinon** : dire "non disponible"
+**PERIOD DISTINCTION:**
+- "FY2025" / "in 2025" = full fiscal year.
+- "Q1 2025" / "Q4 2025" = specific quarter.
+- If the question asks for the year, answer with the FY (not Q4).
 
-**UNITÉS (CRUCIAL) :**
-- Tableaux 10-K/10-Q : montants en **millions USD** ("in millions")
-  → "$402,836" = 402,836 millions = **402.8 milliards**
-- Écris toujours les 2 formes : "402,836 M USD (402.8 Md USD)"
-- Rappel : 1K = 1 000 ; 1M = 1 000 000 ; 1B = 1 milliard
-
-**DISTINCTION DES PÉRIODES :**
-- "FY2025" / "in 2025" = exercice fiscal complet
-- "Q1 2025" / "Q4 2025" = trimestre spécifique
-- Si la question demande l'année, réponds avec le FY (pas le Q4)
-
-Documents de contexte :
+Context documents:
 {context}
 
-Question : {question}
+Question: {question}
 
-Réponse :
+Answer (in English ONLY):
 """
 
 COMPARATIVE_PROMPT = """
-Tu es un analyste financier expert. Réponds en suivant STRICTEMENT ces règles.
+You are an expert financial analyst. Follow these rules STRICTLY.
 
-**RÈGLE 1 — UNE SOURCE = UNE SEULE ENTREPRISE**
-Chaque [Source X] concerne UNE entreprise précise indiquée dans le champ "Entreprise:".
-Tu NE DOIS JAMAIS utiliser un chiffre d'une source Microsoft pour Alphabet (et vice-versa).
+**RULE 1 — ONE SOURCE = ONE COMPANY**
+Each [Source X] relates to ONE specific company indicated in the "Company:" field.
+You MUST NEVER use a figure from a Microsoft source for Alphabet (and vice versa).
 
-**RÈGLE 2 — TABLEAU DE SYNTHÈSE**
-Remplis ce tableau avec les chiffres TROUVÉS dans les sources :
+**RULE 2 — SUMMARY TABLE**
+Fill this table with the figures FOUND in the sources:
 
-| Entreprise | Période | Revenue TOTAL | Source |
+| Company | Period | TOTAL Revenue | Source |
 |---|---|---|---|
 | Alphabet | 2024 | ?? | [Source X] |
 | Microsoft | 2024 | ?? | [Source Y] |
 
-- Pour chaque ligne, cite le [Source X] EXACT d'où vient le chiffre.
-- Si tu ne trouves pas, écris "❌ non trouvé" et NE DEVINE PAS.
+- For each line, cite the EXACT [Source X] from which the figure comes.
+- If you cannot find it, write "❌ not found" and DO NOT GUESS.
 
-**RÈGLE 3 — VÉRIFICATION CROISÉE**
-Avant de finaliser, vérifie que :
-- Le chiffre Alphabet vient bien d'une source dont "Entreprise: GOOGL/Alphabet"
-- Le chiffre Microsoft vient bien d'une source dont "Entreprise: MSFT/Microsoft"
-- Si les 2 chiffres sont identiques, c'est SUSPECT → revérifie les sources.
+**RULE 3 — CROSS-VERIFICATION**
+Before finalizing, verify that:
+- The Alphabet figure comes from a source with "Company: GOOGL/Alphabet".
+- The Microsoft figure comes from a source with "Company: MSFT/Microsoft".
+- If the 2 figures are identical, it is SUSPICIOUS -> double-check the sources.
 
-**RÈGLE 4 — EXTRAITS AUTORISÉS**
-Cherche en priorité :
-- "Total revenues", "Revenues" dans un tableau "Year Ended December 31"
-- "Total revenue" dans un "INCOME STATEMENT"
-- Prends la colonne correspondant à 2024 (pas 2023 ni 2022)
+**RULE 4 — ALLOWED EXCERPTS**
+Look primarily for:
+- "Total revenues", "Revenues" in a "Year Ended December 31" table.
+- "Total revenue" in an "INCOME STATEMENT".
+- Take the column corresponding to the requested year (not the previous ones).
 
-Documents de contexte :
+**RULE 5 — LANGUAGE**
+You MUST answer in **ENGLISH**.
+
+Context documents:
 {context}
 
-Question : {question}
+Question: {question}
 
-Réponse :
+Answer (in English ONLY):
 """
 
 RISK_PROMPT = """
-Tu es un analyste financier expert. Tu dois extraire et synthétiser les **facteurs de risque** à partir des documents fournis.
+You are an expert financial analyst. You must extract and synthesize the **risk factors** from the provided documents.
 
-**Règles :**
-1. Liste les risques par catégorie si possible (macroéconomique, réglementaire, opérationnel, concurrentiel).
-2. Donne pour chaque risque une brève description (1-2 phrases) et sa source [Source X].
-3. Utilise des puces pour la lisibilité.
-4. Ne fabrique aucun risque qui n'est pas explicitement mentionné.
+**Rules:**
+1. List risks by category if possible (macroeconomic, regulatory, operational, competitive).
+2. Provide a brief description (1-2 sentences) and its source [Source X] for each risk.
+3. Use bullet points for readability.
+4. Do not fabricate any risk that is not explicitly mentioned.
+5. **LANGUAGE RULE**: You MUST answer in **ENGLISH**.
 
-Documents de contexte :
+Context documents:
 {context}
 
-Question : {question}
+Question: {question}
 
-Facteurs de risque identifiés :
+Identified risk factors (in English ONLY):
 """
-
 
 # ==================== AGENT PRINCIPAL ====================
 def ask_financial_agent(
@@ -170,7 +154,7 @@ def ask_financial_agent(
     force_simple: bool = False,
 ):
     """
-    Retourne (answer: str, sources: List[Dict]).
+    Returns (answer: str, sources: List[Dict]).
     """
     logger.info(f"🔍 Question reçue : '{question}'")
 
@@ -184,7 +168,7 @@ def ask_financial_agent(
     if not analysis.get("needs_decomposition", False):
         docs = search_engine.search_hybrid(question, top_k=top_k, filters=filters)
         if not docs:
-            return "Aucun document pertinent trouvé.", []
+            return "No relevant documents found.", []
 
         context = format_docs(docs)
         prompt = ChatPromptTemplate.from_template(SIMPLE_PROMPT)
@@ -221,15 +205,15 @@ def ask_financial_agent(
             unique_docs.append(doc)
 
     if not unique_docs:
-        return "Aucun document pertinent trouvé.", []
+        return "No relevant documents found.", []
 
     # Construction du contexte groupé
     context_parts = []
     source_cursor = 0
     for i, item in enumerate(all_docs_by_query):
-        header = f"### Sous-question {i + 1} : {item['sub_query']}"
+        header = f"### Sub-question {i + 1}: {item['sub_query']}"
         if item.get("company"):
-            header += f" (Entreprise : {item['company']})"
+            header += f" (Company: {item['company']})"
         context_parts.append(header)
         context_parts.append(
             format_docs(item["docs"], start_idx=source_cursor)
@@ -248,21 +232,3 @@ def ask_financial_agent(
     chain = prompt | llm | StrOutputParser()
     answer = chain.invoke({"context": context, "question": question})
     return answer, unique_docs
-
-
-# ==================== TEST ====================
-if __name__ == "__main__":
-    queries = [
-        "What was Tesla Q4 2025 revenue?",
-        "Compare Alphabet and Microsoft revenue in Q1 2025",
-        "Quels sont les principaux facteurs de risque mentionnés dans le 10-K de Tesla 2025 ?",
-    ]
-
-    for q in queries:
-        print("\n" + "=" * 70)
-        print(f"❓ {q}")
-        print("=" * 70)
-        answer, sources = ask_financial_agent(q, top_k=5)
-        print(answer)
-        print(f"\n[SOURCES: {len(sources)}]")
-        print()

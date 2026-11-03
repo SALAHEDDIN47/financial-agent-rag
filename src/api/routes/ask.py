@@ -4,6 +4,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from starlette.concurrency import run_in_threadpool
 
 from src.rag.agent import ask_financial_agent
 
@@ -62,12 +63,14 @@ async def ask_question(request: AskRequest):
         filters = filters or None
 
         # Appel de l'agent (retourne tuple)
-        answer, docs = ask_financial_agent(
+        answer, docs = await run_in_threadpool(
+            ask_financial_agent,
             question=request.query,
             top_k=request.top_k,
             filters=filters,
             force_simple=request.force_simple,
         )
+
 
         # ✅ FIX : on conserve TOUTES les métadonnées utiles
         sources = []
